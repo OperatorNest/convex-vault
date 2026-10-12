@@ -1,0 +1,108 @@
+{
+  "name": "@operatornest/convex-vault",
+  "version": "0.0.0",
+  "description": "Encrypted and hashed credential storage for Convex with owners, expiry, use limits and key rotation.",
+  "keywords": [
+    "component",
+    "convex",
+    "credentials",
+    "encryption",
+    "vault"
+  ],
+  "homepage": "https://github.com/OperatorNest/convex-vault#readme",
+  "bugs": {
+    "url": "https://github.com/OperatorNest/convex-vault/issues"
+  },
+  "license": "MIT",
+  "author": "OperatorNest",
+  "contributors": [
+    {
+      "name": "Ravalika Korthiwada",
+      "url": "https://github.com/ravalikamaker"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OperatorNest/convex-vault.git"
+  },
+  "bin": {
+    "convex-vault": "bin/convex-vault.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "!src/test-helpers.ts"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "module": "./dist/client/index.js",
+  "types": "./dist/client/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./test": "./src/test.ts",
+    "./_generated/component.js": {
+      "types": "./dist/component/_generated/component.d.ts"
+    },
+    "./_generated/component": {
+      "types": "./dist/component/_generated/component.d.ts"
+    },
+    "./convex.config.js": {
+      "types": "./dist/component/convex.config.d.ts",
+      "default": "./dist/component/convex.config.js"
+    },
+    "./convex.config": {
+      "types": "./dist/component/convex.config.d.ts",
+      "default": "./dist/component/convex.config.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build:codegen": "node scripts/with-local-lock.mjs pnpm run build:codegen:locked",
+    "build:codegen:locked": "convex codegen --component-dir ./src/component && pnpm build && convex codegen",
+    "build": "node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
+    "build:clean": "rm -rf dist *.tsbuildinfo && pnpm build:codegen",
+    "typecheck": "node node_modules/@typescript/native/bin/tsc --noEmit && node node_modules/@typescript/native/bin/tsc -p tsconfig.test.json",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node scripts/check-source.mjs && vitest run --coverage",
+    "test:watch": "vitest",
+    "check": "pnpm fmt:check && pnpm build && pnpm lint && pnpm typecheck && pnpm knip && pnpm test",
+    "changeset": "changeset",
+    "knip": "knip --no-progress"
+  },
+  "devDependencies": {
+    "@changesets/cli": "3.0.3",
+    "@convex-dev/eslint-plugin": "5.0.0",
+    "@edge-runtime/vm": "5.0.0",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "@vitest/coverage-v8": "5.0.3",
+    "convex": "1.46.0",
+    "convex-helpers": "0.1.128",
+    "convex-test": "0.0.61",
+    "knip": "6.40.0",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2003",
+    "pkg-pr-new": "0.0.90",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "vitest": "5.0.3"
+  },
+  "peerDependencies": {
+    "convex": "^1.46.0",
+    "convex-helpers": "^0.1.106"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@12.9.1"
+}

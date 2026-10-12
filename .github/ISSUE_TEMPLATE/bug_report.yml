@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a reproducible component or client failure.
+labels: ["type:bug", "status:needs-triage"]
+body:
+  - type: input
+    id: package_version
+    attributes:
+      label: Package version
+      placeholder: e.g. 0.2.1, or commit SHA for an unreleased checkout
+    validations:
+      required: true
+  - type: input
+    id: convex_version
+    attributes:
+      label: Convex version
+    validations:
+      required: true
+  - type: input
+    id: node_version
+    attributes:
+      label: Node.js version
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Deployment type
+      options: [Convex Cloud, Self-hosted, Local backend]
+    validations:
+      required: true
+  - type: input
+    id: operating_system
+    attributes:
+      label: Operating system and version
+      description: Fill in for CLI or local-backend failures; otherwise leave blank.
+    validations:
+      required: false
+  - type: input
+    id: kind_policy
+    attributes:
+      label: Storage, origin and lookup policy
+      description: Include only policy settings, never values or keys.
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest code or steps that reproduce the issue. Replace keys, credential values and customer data with placeholders.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Optional logs
+      description: Do not include secrets or credentials (including master keys and tokens), plaintext values, lookup hashes, customer data, or personal information.
+    validations:
+      required: false
+  - type: checkboxes
+    id: issue_search
+    attributes:
+      label: Existing reports
+      options:
+        - label: I searched existing issues and discussions.
+          required: true

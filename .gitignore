@@ -1,0 +1,11 @@
+node_modules/
+.convex/
+.env.local
+.env.*.local
+dist/
+coverage/
+*.tsbuildinfo
+*.tgz
+.agents/skills/convex*/
+skills-lock.json
+**/_generated/ai/
