@@ -17,4 +17,4 @@ Choose exactly one release outcome below.
 - [ ] `pnpm build:codegen` when component functions, schema, or generated APIs change.
 - [ ] `pnpm smoke` when runtime behavior, component functions, schema, or client integration change.
 - [ ] Updated relevant documentation, or no documentation change is needed.
-- [ ] No secrets, tokens, personal data, or provider/customer data are included.
+- [ ] No credentials, tokens, personal data, or provider/customer data are included.

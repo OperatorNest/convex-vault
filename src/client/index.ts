@@ -1,5 +1,12 @@
-import type { FunctionArgs, FunctionReference, PaginationOptions } from "convex/server";
+import type {
+  GenericDataModel,
+  GenericMutationCtx,
+  GenericQueryCtx,
+  GenericActionCtx,
+  PaginationOptions,
+} from "convex/server";
 import type { ComponentApi } from "../component/_generated/component.js";
+import { validateGenerate } from "../shared/bounds.js";
 import { vaultError } from "../shared/errors.js";
 import type { Storage, Lookup, Metadata } from "../shared/validators.js";
 export { isVaultError, VAULT_ERROR_CODES } from "../shared/errors.js";
@@ -7,16 +14,22 @@ export type { VaultErrorCode, VaultErrorData } from "../shared/errors.js";
 export { generateMasterKey } from "../shared/keyring.js";
 export * from "../shared/validators.js";
 
+/** Defines a credential kind's storage, lookup, generation and disclosure policy. */
 export type KindOptions = {
   storage: Storage;
-  generate?: { prefix?: string; bytes?: number };
-  lookup?: Lookup;
-  hint?: boolean;
+  hint: boolean;
+  auditReveals: boolean;
   ttlMs?: number;
   maxUses?: number;
-  auditReveals?: boolean;
+} & (
+  | { generate: { prefix?: string; bytes: number }; lookup?: never }
+  | { generate?: never; lookup: Lookup }
+);
+/** Configures the credential kinds available to a vault client. */
+export type VaultOptions<K extends Record<string, KindOptions> = Record<string, KindOptions>> = {
+  kinds: K;
 };
-export type VaultOptions<K extends Record<string, KindOptions>> = { kinds: K };
+/** Supplies ownership, metadata and lifecycle limits when creating a credential. */
 export type CreateOptions = {
   owner: string;
   name?: string;
@@ -28,6 +41,7 @@ export type CreateOptions = {
   maxUses?: number;
   actor?: string;
 };
+/** Supplies a replacement value, grace period and optional renewed expiry. */
 export type ReplaceOptions = {
   value?: string;
   graceMs?: number;
@@ -35,137 +49,170 @@ export type ReplaceOptions = {
   expiresAt?: number;
   actor?: string;
 };
+/** Requests a previous value during grace and identifies the reveal actor. */
 export type RevealOptions = { includePrevious?: boolean; actor?: string };
+/** Restricts verification to an owner and required scopes. */
 export type VerifyOptions = { owner?: string; requiredScopes?: string[] };
+/** Provides the stored-row query runner used by vault reads. */
+export type QueryContext = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
+/** Provides the transactional mutation runner used by credential operations. */
+export type MutationContext = Pick<GenericMutationCtx<GenericDataModel>, "runMutation">;
+/** Provides the action runner available to app actions. */
+export type ActionContext = Pick<GenericActionCtx<GenericDataModel>, "runAction">;
 
 type KindName<K> = Extract<keyof K, string>;
 type Allowed<K, S extends Storage> = {
   [P in KindName<K>]: K[P] extends { storage: S } ? P : never;
 }[KindName<K>];
+/** Identifies a credential by its row ID or its owner, kind and name. */
 export type VaultReference<K extends string = string> =
-  | { entryId: string; kind?: K }
+  | { credentialId: string; kind?: K }
   | { owner: string; kind: K; name: string };
 type CreateFor<C> = CreateOptions &
   (C extends { generate: object } ? { value?: never } : { value: string });
 type VerifyFor<C> = C extends { generate: object } | { lookup: "global" }
-  ? [options?: VerifyOptions]
-  : [options: VerifyOptions & { owner: string }];
-type MutationRunner = {
-  runMutation: <F extends FunctionReference<"mutation", "public" | "internal">>(
-    fn: F,
-    args: FunctionArgs<F>,
-  ) => Promise<F["_returnType"]>;
-};
-type QueryRunner = {
-  runQuery: <F extends FunctionReference<"query", "public" | "internal">>(
-    fn: F,
-    args: FunctionArgs<F>,
-  ) => Promise<F["_returnType"]>;
-};
+  ? VerifyOptions
+  : VerifyOptions & { owner: string };
 
-/** Calls the vault component from app server functions. The app authenticates and authorizes every call before it invokes a method. */
-export class Vault<const K extends Record<string, KindOptions>> {
+function requireKind(options: VaultOptions, name: string): KindOptions {
+  const policy = options.kinds[name];
+  if (!policy) throw vaultError("VAULT_INVALID_ARGUMENT");
+  if (
+    typeof policy.hint !== "boolean" ||
+    typeof policy.auditReveals !== "boolean" ||
+    (!policy.generate && policy.lookup === undefined)
+  )
+    throw vaultError("VAULT_INVALID_ARGUMENT");
+  if (policy.generate) validateGenerate(policy.generate.prefix ?? "", policy.generate.bytes);
+  return policy;
+}
+function validateReference(options: VaultOptions, ref: VaultReference) {
+  if (ref.kind !== undefined) requireKind(options, ref.kind);
+  return "credentialId" in ref
+    ? { credentialId: ref.credentialId, kind: ref.kind }
+    : { owner: ref.owner, kind: ref.kind, name: ref.name };
+}
+
+/** Calls credential, key and audit-event operations after app authorization. */
+export class Vault<const K extends Record<string, KindOptions> = Record<string, KindOptions>> {
+  public readonly options: VaultOptions<K> | VaultOptions<Record<string, never>>;
+  /** Binds the component and its app-defined credential kinds to this client. */
   constructor(
     public readonly component: ComponentApi,
-    public readonly options: VaultOptions<K>,
-  ) {}
-
-  private kind(name: KindName<K>): KindOptions {
-    const options = this.options.kinds[name];
-    if (!options) throw vaultError("VAULT_INVALID_ARGUMENT");
-    return options;
-  }
-  private ref(ref: VaultReference<KindName<K>>) {
-    if (ref.kind !== undefined) this.kind(ref.kind);
-    return ref;
-  }
-  create<N extends KindName<K>>(ctx: MutationRunner, kind: N, options: CreateFor<K[N]>) {
-    const policy = this.kind(kind);
-    return ctx.runMutation(this.component.vault.create, {
-      owner: options.owner,
-      kind,
-      value: options.value,
-      name: options.name,
-      label: options.label,
-      scopes: options.scopes,
-      metadata: options.metadata,
-      expiresAt: options.expiresAt,
-      actor: options.actor,
-      storage: policy.storage,
-      origin: policy.generate ? "generated" : "supplied",
-      lookup: policy.generate ? "global" : (policy.lookup ?? "owner"),
-      prefix: policy.generate?.prefix,
-      bytes: policy.generate?.bytes,
-      hint: policy.hint,
-      auditReveals: policy.auditReveals,
-      ttlMs: options.expiresAt === undefined ? (options.ttlMs ?? policy.ttlMs) : options.ttlMs,
-      maxUses: options.maxUses ?? policy.maxUses,
-    });
-  }
-  reveal(
-    ctx: MutationRunner,
-    ref: VaultReference<Allowed<K, "encrypted" | "both">>,
-    options: RevealOptions = {},
+    options?: VaultOptions<K>,
   ) {
-    if (ref.kind !== undefined && this.kind(ref.kind).storage === "hashed")
-      throw vaultError("VAULT_NOT_REVEALABLE");
-    return ctx.runMutation(this.component.vault.reveal, {
-      ref: this.ref(ref),
-      includePrevious: options.includePrevious,
-      actor: options.actor,
-    });
+    this.options = options ?? { kinds: {} };
   }
-  verify<N extends Allowed<K, "hashed" | "both">>(
-    ctx: MutationRunner,
-    kind: N,
-    value: string,
-    ...options: VerifyFor<K[N]>
-  ) {
-    if (this.kind(kind).storage === "encrypted") throw vaultError("VAULT_NOT_VERIFIABLE");
-    const [{ owner, requiredScopes } = {}] = options;
-    return ctx.runMutation(this.component.vault.verify, { kind, value, owner, requiredScopes });
-  }
-  replace(ctx: MutationRunner, ref: VaultReference<KindName<K>>, options: ReplaceOptions = {}) {
-    return ctx.runMutation(this.component.vault.replace, {
-      ref: this.ref(ref),
-      value: options.value,
-      graceMs: options.graceMs,
-      ttlMs: options.ttlMs,
-      expiresAt: options.expiresAt,
-      actor: options.actor,
-    });
-  }
-  revoke(ctx: MutationRunner, ref: VaultReference<KindName<K>>, options: { actor?: string } = {}) {
-    return ctx.runMutation(this.component.vault.revoke, {
-      ref: this.ref(ref),
-      actor: options.actor,
-    });
-  }
-  get(ctx: QueryRunner, ref: VaultReference<KindName<K>>) {
-    return ctx.runQuery(this.component.vault.get, { ref: this.ref(ref) });
-  }
-  list(
-    ctx: QueryRunner,
-    options: { owner: string; kind?: KindName<K>; paginationOpts: PaginationOptions },
-  ) {
-    if (options.kind !== undefined) this.kind(options.kind);
-    return ctx.runQuery(this.component.vault.list, {
-      owner: options.owner,
-      kind: options.kind,
-      paginationOpts: options.paginationOpts,
-    });
-  }
-  listEvents(
-    ctx: QueryRunner,
-    ref: { entryId: string } | { owner: string },
-    paginationOpts: PaginationOptions,
-  ) {
-    return ctx.runQuery(this.component.vault.listEvents, { ref, paginationOpts });
-  }
-  keyStatus(ctx: QueryRunner) {
-    return ctx.runQuery(this.component.maintenance.keyStatus, {});
-  }
-  rotateKeys(ctx: MutationRunner) {
-    return ctx.runMutation(this.component.maintenance.rotateKeys, {});
-  }
+  credentials = {
+    /** Creates a credential and returns plaintext only for a generated kind. */
+    create: <N extends KindName<K>>(ctx: MutationContext, args: { kind: N } & CreateFor<K[N]>) => {
+      const policy = requireKind(this.options, args.kind);
+      return ctx.runMutation(this.component.credentials.create, {
+        owner: args.owner,
+        kind: args.kind,
+        value: args.value,
+        name: args.name,
+        label: args.label,
+        scopes: args.scopes,
+        metadata: args.metadata,
+        expiresAt: args.expiresAt,
+        actor: args.actor,
+        storage: policy.storage,
+        origin: policy.generate ? "generated" : "supplied",
+        lookup: policy.generate ? "global" : policy.lookup,
+        prefix: policy.generate?.prefix,
+        bytes: policy.generate?.bytes,
+        hint: policy.hint,
+        auditReveals: policy.auditReveals,
+        ttlMs: args.expiresAt === undefined ? (args.ttlMs ?? policy.ttlMs) : args.ttlMs,
+        maxUses: args.maxUses ?? policy.maxUses,
+      });
+    },
+    /** Reveals the current plaintext and optionally the previous plaintext during grace. */
+    reveal: (
+      ctx: MutationContext,
+      args: { ref: VaultReference<Allowed<K, "encrypted" | "both">> } & RevealOptions,
+    ) => {
+      if (
+        args.ref.kind !== undefined &&
+        requireKind(this.options, args.ref.kind).storage === "hashed"
+      )
+        throw vaultError("VAULT_NOT_REVEALABLE");
+      return ctx.runMutation(this.component.credentials.reveal, {
+        ref: validateReference(this.options, args.ref),
+        includePrevious: args.includePrevious,
+        actor: args.actor,
+      });
+    },
+    /** Verifies a presented value against the kind's lookup policy and required scopes. */
+    verify: <N extends Allowed<K, "hashed" | "both">>(
+      ctx: MutationContext,
+      args: { kind: N; value: string } & VerifyFor<K[N]>,
+    ) => {
+      if (requireKind(this.options, args.kind).storage === "encrypted")
+        throw vaultError("VAULT_NOT_VERIFIABLE");
+      return ctx.runMutation(this.component.credentials.verify, {
+        kind: args.kind,
+        value: args.value,
+        owner: args.owner,
+        requiredScopes: args.requiredScopes,
+      });
+    },
+    /** Replaces a credential value while preserving its creation policy and use count. */
+    replace: (ctx: MutationContext, args: { ref: VaultReference<KindName<K>> } & ReplaceOptions) =>
+      ctx.runMutation(this.component.credentials.replace, {
+        ref: validateReference(this.options, args.ref),
+        value: args.value,
+        graceMs: args.graceMs,
+        ttlMs: args.ttlMs,
+        expiresAt: args.expiresAt,
+        actor: args.actor,
+      }),
+    /** Revokes a credential and deletes its current and previous values. */
+    revoke: (ctx: MutationContext, args: { ref: VaultReference<KindName<K>>; actor?: string }) =>
+      ctx.runMutation(this.component.credentials.revoke, {
+        ref: validateReference(this.options, args.ref),
+        actor: args.actor,
+      }),
+    /** Reads stored credential metadata and its current disclosure hint. */
+    get: (ctx: QueryContext, args: { ref: VaultReference<KindName<K>> }) =>
+      ctx.runQuery(this.component.credentials.get, {
+        ref: validateReference(this.options, args.ref),
+      }),
+    /** Lists stored credential metadata for an owner with an optional kind filter. */
+    list: (
+      ctx: QueryContext,
+      args: { owner: string; kind?: KindName<K>; paginationOpts: PaginationOptions },
+    ) => {
+      if (args.kind !== undefined) requireKind(this.options, args.kind);
+      return ctx.runQuery(this.component.credentials.list, {
+        owner: args.owner,
+        kind: args.kind,
+        paginationOpts: args.paginationOpts,
+      });
+    },
+  };
+  keys = {
+    /** Reads configured master-key versions and the versions referenced by stored values. */
+    getStatus: (ctx: QueryContext) => ctx.runQuery(this.component.keys.getStatus, {}),
+    /** Starts batched rewrapping and rehashing with the active master-key version. */
+    rotate: (ctx: MutationContext) => ctx.runMutation(this.component.keys.rotate, {}),
+  };
+  events = {
+    /** Lists stored audit events for a credential or an owner. */
+    list: (
+      ctx: QueryContext,
+      args: {
+        ref: { credentialId: string } | { owner: string };
+        paginationOpts: PaginationOptions;
+      },
+    ) =>
+      ctx.runQuery(this.component.events.list, {
+        ref:
+          "credentialId" in args.ref
+            ? { credentialId: args.ref.credentialId }
+            : { owner: args.ref.owner },
+        paginationOpts: args.paginationOpts,
+      }),
+  };
 }

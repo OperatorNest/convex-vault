@@ -9,10 +9,11 @@
  */
 
 import type * as cleanup from "../cleanup.js";
+import type * as credentials from "../credentials.js";
 import type * as crons from "../crons.js";
+import type * as events from "../events.js";
 import type * as helpers from "../helpers.js";
-import type * as maintenance from "../maintenance.js";
-import type * as vault from "../vault.js";
+import type * as keys from "../keys.js";
 
 import type {
   ApiFromModules,
@@ -23,10 +24,11 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   cleanup: typeof cleanup;
+  credentials: typeof credentials;
   crons: typeof crons;
+  events: typeof events;
   helpers: typeof helpers;
-  maintenance: typeof maintenance;
-  vault: typeof vault;
+  keys: typeof keys;
 }> = anyApi as any;
 
 /**

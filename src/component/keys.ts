@@ -39,7 +39,7 @@ async function referencedVersions(ctx: QueryCtx, field: "keyVersion" | "hashVers
     .first();
   return { versions, truncated: more !== null };
 }
-export const keyStatus = query({
+export const getStatus = query({
   args: {},
   returns: v.object({
     activeVersion: v.number(),
@@ -83,12 +83,14 @@ async function rotateBatch(
 ): Promise<void> {
   const ring = keyring();
   if ((await keyringFingerprint(ring)) !== fingerprint) throw vaultError("VAULT_NOT_CONFIGURED");
-  // Group both versions of each entry: one event and at most 100 values per batch.
-  const page = await paginator(ctx.db, schema).query("entries").paginate({ numItems: 50, cursor });
-  for (const entry of page.page) {
+  // Group both versions of each credential: one event and at most 100 values per batch.
+  const page = await paginator(ctx.db, schema)
+    .query("credentials")
+    .paginate({ numItems: 50, cursor });
+  for (const credential of page.page) {
     const rows = await ctx.db
       .query("values")
-      .withIndex("by_entry_and_state", (q) => q.eq("entry", entry._id))
+      .withIndex("by_credentialId_and_state", (q) => q.eq("credentialId", credential._id))
       .take(3);
     if (rows.length > 2) throw vaultError("VAULT_INVALID_ARGUMENT");
     let rekeyed = false;
@@ -99,16 +101,16 @@ async function rotateBatch(
           (row.hashVersion === undefined || row.hashVersion === ring.active))
       )
         continue;
-      const bound = identity(entry, row);
+      const bound = identity(credential, row);
       const encrypted = envelope(row);
       let hashes;
-      if (entry.storage === "both") {
+      if (credential.storage === "both") {
         const value = await decryptEnvelope(ring, bound, encrypted);
         hashes = {
           lookupHash: await lookupHash(
             masterKey(ring, ring.active),
-            entry.kind,
-            entry.lookup === "owner" ? entry.owner : "",
+            credential.kind,
+            credential.lookup === "owner" ? credential.owner : "",
             value,
           ),
           hashVersion: ring.active,
@@ -120,15 +122,15 @@ async function rotateBatch(
       });
       rekeyed = true;
     }
-    if (rekeyed) await event(ctx, entry, "rekeyed");
+    if (rekeyed) await event(ctx, credential, "rekeyed");
   }
   if (!page.isDone)
-    await ctx.scheduler.runAfter(0, internal.maintenance.continueRotation, {
+    await ctx.scheduler.runAfter(0, internal.keys.continueRotation, {
       cursor: page.continueCursor,
       keyringFingerprint: fingerprint,
     });
 }
-export const rotateKeys = mutation({
+export const rotate = mutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {

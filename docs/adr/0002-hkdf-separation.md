@@ -6,4 +6,4 @@ For each master-key version derive 256-bit keys with HKDF-SHA256, a 32-zero-byte
 
 ## Consequences
 
-One master secret serves two independent cryptographic purposes without reusing key bytes. Lookup hashes are keyed, so database exports alone do not enable guessing supplied plaintext. Master-key compromise together with database compromise permits offline guesses of low-entropy supplied values. Changing either info string or salt is a format migration.
+One master key serves two independent cryptographic purposes without reusing key bytes. Lookup hashes are keyed, so database exports alone do not enable guessing supplied plaintext. Master-key compromise together with database compromise permits offline guesses of low-entropy supplied values. Changing either info string or salt is a format migration.

@@ -5,7 +5,7 @@ import { mutation, query } from "./_generated/server.js";
 import schema from "./schema.js";
 import {
   keyring,
-  findEntry,
+  findCredential,
   current,
   projection,
   envelope,
@@ -30,7 +30,6 @@ import {
   expiry,
 } from "../shared/bounds.js";
 import { decryptEnvelope } from "../shared/envelope.js";
-import { randomId } from "../shared/value.js";
 import {
   storageValidator,
   originValidator,
@@ -38,8 +37,7 @@ import {
   metadataValidator,
   referenceValidator,
   lifecycleFields,
-  entryResultValidator,
-  eventValidator,
+  credentialResultValidator,
   createResultValidator,
   replaceResultValidator,
   revealResultValidator,
@@ -59,8 +57,8 @@ export const create = mutation({
     value: v.optional(v.string()),
     prefix: v.optional(v.string()),
     bytes: v.optional(v.number()),
-    hint: v.optional(v.boolean()),
-    auditReveals: v.optional(v.boolean()),
+    hint: v.boolean(),
+    auditReveals: v.boolean(),
     scopes: v.optional(v.array(v.string())),
     metadata: v.optional(metadataValidator),
     actor: v.optional(v.string()),
@@ -83,7 +81,8 @@ export const create = mutation({
     const expiresAt = expiry(args, now);
     if (args.origin === "generated") {
       invalid(args.lookup !== "global" || args.value !== undefined);
-      validateGenerate(args.prefix ?? "", args.bytes ?? 32);
+      if (args.bytes === undefined) throw vaultError("VAULT_INVALID_ARGUMENT");
+      validateGenerate(args.prefix ?? "", args.bytes);
     } else
       invalid(args.prefix !== undefined || args.bytes !== undefined || args.value === undefined);
     const policy = await ctx.db
@@ -107,16 +106,14 @@ export const create = mutation({
       });
     if (args.name !== undefined) {
       const duplicate = await ctx.db
-        .query("entries")
+        .query("credentials")
         .withIndex("by_owner_and_kind_and_name", (q) =>
           q.eq("owner", args.owner).eq("kind", args.kind).eq("name", args.name),
         )
         .first();
       if (duplicate) throw vaultError("VAULT_DUPLICATE_NAME");
     }
-    const entryId = randomId();
-    const id = await ctx.db.insert("entries", {
-      entryId,
+    const credentialId = await ctx.db.insert("credentials", {
       owner: args.owner,
       kind: args.kind,
       storage: args.storage,
@@ -125,23 +122,23 @@ export const create = mutation({
       name: args.name,
       label: args.label,
       prefix: args.origin === "generated" ? (args.prefix ?? "") : undefined,
-      bytes: args.origin === "generated" ? (args.bytes ?? 32) : undefined,
-      hint: args.hint ?? args.origin === "generated",
+      bytes: args.origin === "generated" ? args.bytes : undefined,
+      hint: args.hint,
       status: "active",
       scopes,
       metadata,
       expiresAt,
       maxUses: args.maxUses,
       useCount: 0,
-      auditReveals: args.auditReveals ?? true,
+      auditReveals: args.auditReveals,
       createdAt: now,
       updatedAt: now,
     });
-    const entry = await ctx.db.get("entries", id);
-    if (!entry) throw vaultError("VAULT_NOT_FOUND");
-    const result = await writeValue(ctx, ring, entry, args.value);
-    await event(ctx, entry, "created", args.actor);
-    return { entryId, ...result };
+    const credential = await ctx.db.get("credentials", credentialId);
+    if (!credential) throw vaultError("VAULT_NOT_FOUND");
+    const result = await writeValue(ctx, ring, credential, args.value);
+    await event(ctx, credential, "created", args.actor);
+    return { credentialId, ...result };
   },
 });
 export const reveal = mutation({
@@ -153,26 +150,28 @@ export const reveal = mutation({
   returns: revealResultValidator,
   handler: async (ctx, args) => {
     const ring = keyring();
-    const entry = await findEntry(ctx, args.ref);
+    const credential = await findCredential(ctx, args.ref);
     const now = Date.now();
-    requireActive(entry, now);
-    if (entry.storage === "hashed") throw vaultError("VAULT_NOT_REVEALABLE");
-    const row = await current(ctx, entry);
-    const value = await decryptEnvelope(ring, identity(entry, row), envelope(row));
+    requireActive(credential, now);
+    if (credential.storage === "hashed") throw vaultError("VAULT_NOT_REVEALABLE");
+    const row = await current(ctx, credential);
+    const value = await decryptEnvelope(ring, identity(credential, row), envelope(row));
     let previous;
     if (args.includePrevious) {
       const old = await ctx.db
         .query("values")
-        .withIndex("by_entry_and_state", (q) => q.eq("entry", entry._id).eq("state", "previous"))
+        .withIndex("by_credentialId_and_state", (q) =>
+          q.eq("credentialId", credential._id).eq("state", "previous"),
+        )
         .unique();
-      if (old?.validUntil !== undefined && old.validUntil > now)
+      if (old?.validUntilAt !== undefined && old.validUntilAt > now)
         previous = {
-          value: await decryptEnvelope(ring, identity(entry, old), envelope(old)),
-          validUntil: old.validUntil,
+          value: await decryptEnvelope(ring, identity(credential, old), envelope(old)),
+          validUntilAt: old.validUntilAt,
         };
     }
-    if (entry.auditReveals) await event(ctx, entry, "revealed", args.actor);
-    await consume(ctx, entry, now, false, args.actor);
+    if (credential.auditReveals) await event(ctx, credential, "revealed", args.actor);
+    await consume(ctx, credential, now, false, args.actor);
     return { value, ...(previous ? { previous } : {}) };
   },
 });
@@ -207,31 +206,31 @@ export const verify = mutation({
       args.value,
     );
     if (!row) return { ok: false, reason: "not_found" };
-    const entry = await ctx.db.get("entries", row.entry);
+    const credential = await ctx.db.get("credentials", row.credentialId);
     const now = Date.now();
     if (
-      !entry ||
-      entry.status === "revoked" ||
-      entry.kind !== args.kind ||
-      (args.owner !== undefined && entry.owner !== args.owner)
+      !credential ||
+      credential.status === "revoked" ||
+      credential.kind !== args.kind ||
+      (args.owner !== undefined && credential.owner !== args.owner)
     )
       return { ok: false, reason: "not_found" };
-    if (entry.status === "exhausted") return { ok: false, reason: "exhausted" };
+    if (credential.status === "exhausted") return { ok: false, reason: "exhausted" };
     if (
-      (entry.expiresAt !== undefined && now >= entry.expiresAt) ||
-      (row.state === "previous" && (row.validUntil === undefined || now >= row.validUntil))
+      (credential.expiresAt !== undefined && now >= credential.expiresAt) ||
+      (row.state === "previous" && (row.validUntilAt === undefined || now >= row.validUntilAt))
     )
       return { ok: false, reason: "expired" };
-    if (requiredScopes.some((scope) => !entry.scopes.includes(scope)))
+    if (requiredScopes.some((scope) => !credential.scopes.includes(scope)))
       return { ok: false, reason: "missing_scope" };
-    const usesLeft = await consume(ctx, entry, now, true);
+    const usesLeft = await consume(ctx, credential, now, true);
     return {
       ok: true,
-      entryId: entry.entryId,
-      owner: entry.owner,
-      kind: entry.kind,
-      scopes: entry.scopes,
-      metadata: entry.metadata,
+      credentialId: credential._id,
+      owner: credential.owner,
+      kind: credential.kind,
+      scopes: credential.scopes,
+      metadata: credential.metadata,
       ...(usesLeft !== undefined ? { usesLeft } : {}),
     };
   },
@@ -248,35 +247,42 @@ export const replace = mutation({
   returns: replaceResultValidator,
   handler: async (ctx, args) => {
     const ring = keyring();
-    const entry = await findEntry(ctx, args.ref);
-    requireActive(entry);
+    const credential = await findCredential(ctx, args.ref);
+    requireActive(credential);
     const now = Date.now();
     const graceMs = args.graceMs ?? 0;
     invalid(!Number.isSafeInteger(graceMs) || graceMs < 0 || !Number.isSafeInteger(now + graceMs));
-    const expiresAt = expiry(args, now) ?? entry.expiresAt;
+    const expiresAt = expiry(args, now) ?? credential.expiresAt;
     if (expiresAt !== undefined && expiresAt <= now) throw vaultError("VAULT_INACTIVE");
     const old = await ctx.db
       .query("values")
-      .withIndex("by_entry_and_state", (q) => q.eq("entry", entry._id).eq("state", "current"))
+      .withIndex("by_credentialId_and_state", (q) =>
+        q.eq("credentialId", credential._id).eq("state", "current"),
+      )
       .unique();
-    // Cleanup removes expired payloads before it removes the entry identity.
-    if (!old && (entry.expiresAt === undefined || entry.expiresAt > now))
+    // Cleanup removes expired payloads before it removes the credential identity.
+    if (!old && (credential.expiresAt === undefined || credential.expiresAt > now))
       throw vaultError("VAULT_NOT_FOUND");
     // Probe uniqueness before removing any prior value, including expired grace values.
-    const result = await writeValue(ctx, ring, entry, args.value);
+    const result = await writeValue(ctx, ring, credential, args.value);
     const previous = await ctx.db
       .query("values")
-      .withIndex("by_entry_and_state", (q) => q.eq("entry", entry._id).eq("state", "previous"))
+      .withIndex("by_credentialId_and_state", (q) =>
+        q.eq("credentialId", credential._id).eq("state", "previous"),
+      )
       .unique();
     if (previous) await ctx.db.delete("values", previous._id);
     if (old) {
-      const validUntil = Math.min(now + graceMs, entry.expiresAt ?? Number.POSITIVE_INFINITY);
-      if (validUntil > now)
-        await ctx.db.patch("values", old._id, { state: "previous", validUntil });
+      const validUntilAt = Math.min(
+        now + graceMs,
+        credential.expiresAt ?? Number.POSITIVE_INFINITY,
+      );
+      if (validUntilAt > now)
+        await ctx.db.patch("values", old._id, { state: "previous", validUntilAt });
       else await ctx.db.delete("values", old._id);
     }
-    await ctx.db.patch("entries", entry._id, { expiresAt, updatedAt: now });
-    await event(ctx, entry, "replaced", args.actor);
+    await ctx.db.patch("credentials", credential._id, { expiresAt, updatedAt: now });
+    await event(ctx, credential, "replaced", args.actor);
     return result;
   },
 });
@@ -285,24 +291,24 @@ export const revoke = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     keyring();
-    const entry = await findEntry(ctx, args.ref);
-    if (entry.status === "revoked") return null;
-    await deleteValues(ctx, entry);
-    await ctx.db.patch("entries", entry._id, {
+    const credential = await findCredential(ctx, args.ref);
+    if (credential.status === "revoked") return null;
+    await deleteValues(ctx, credential);
+    await ctx.db.patch("credentials", credential._id, {
       status: "revoked",
       name: undefined,
       updatedAt: Date.now(),
     });
-    await event(ctx, entry, "revoked", args.actor);
+    await event(ctx, credential, "revoked", args.actor);
     return null;
   },
 });
 export const get = query({
   args: { ref: referenceValidator },
-  returns: entryResultValidator,
+  returns: credentialResultValidator,
   handler: async (ctx, args) => {
     keyring();
-    return projection(ctx, await findEntry(ctx, args.ref));
+    return projection(ctx, await findCredential(ctx, args.ref));
   },
 });
 export const list = query({
@@ -311,14 +317,14 @@ export const list = query({
     kind: v.optional(v.string()),
     paginationOpts: paginationOptsValidator,
   },
-  returns: paginationResultValidator(entryResultValidator),
+  returns: paginationResultValidator(credentialResultValidator),
   handler: async (ctx, args) => {
     keyring();
     boundedString(args.owner, 256);
     if (args.kind !== undefined) boundedString(args.kind, 128);
     const pageRequest = boundedPage(args.paginationOpts);
     const page = await paginator(ctx.db, schema)
-      .query("entries")
+      .query("credentials")
       .withIndex("by_owner_and_kind_and_createdAt", (q) =>
         args.kind === undefined
           ? q.eq("owner", args.owner)
@@ -326,31 +332,8 @@ export const list = query({
       )
       .order("desc")
       .paginate(pageRequest);
-    const entries = [];
-    for (const entry of page.page) entries.push(await projection(ctx, entry));
-    return { ...page, page: entries };
-  },
-});
-export const listEvents = query({
-  args: {
-    ref: v.union(v.object({ entryId: v.string() }), v.object({ owner: v.string() })),
-    paginationOpts: paginationOptsValidator,
-  },
-  returns: paginationResultValidator(eventValidator),
-  handler: async (ctx, args) => {
-    keyring();
-    const pageRequest = boundedPage(args.paginationOpts);
-    const ref = args.ref;
-    if ("entryId" in ref) boundedString(ref.entryId, 128);
-    else boundedString(ref.owner, 256);
-    const stream = paginator(ctx.db, schema).query("events");
-    const page = await (
-      "entryId" in ref
-        ? stream.withIndex("by_entryId_and_at", (q) => q.eq("entryId", ref.entryId))
-        : stream.withIndex("by_owner_and_at", (q) => q.eq("owner", ref.owner))
-    )
-      .order("desc")
-      .paginate(pageRequest);
-    return { ...page, page: page.page.map(({ _id, _creationTime, ...fields }) => fields) };
+    const credentials = [];
+    for (const credential of page.page) credentials.push(await projection(ctx, credential));
+    return { ...page, page: credentials };
   },
 });

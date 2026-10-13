@@ -23,35 +23,16 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
-    maintenance: {
-      keyStatus: FunctionReference<
-        "query",
-        "internal",
-        {},
-        {
-          activeVersion: number;
-          missingVersions: Array<number>;
-          missingVersionsTruncated: boolean;
-          versions: Array<{
-            encrypted: boolean;
-            hashed: boolean;
-            version: number;
-          }>;
-        },
-        Name
-      >;
-      rotateKeys: FunctionReference<"mutation", "internal", {}, null, Name>;
-    };
-    vault: {
+    credentials: {
       create: FunctionReference<
         "mutation",
         "internal",
         {
           actor?: string;
-          auditReveals?: boolean;
+          auditReveals: boolean;
           bytes?: number;
           expiresAt?: number;
-          hint?: boolean;
+          hint: boolean;
           kind: string;
           label?: string;
           lookup: "owner" | "global";
@@ -66,7 +47,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           ttlMs?: number;
           value?: string;
         },
-        { entryId: string; hint?: string; value?: string },
+        { credentialId: string; hint?: string; value?: string },
         Name
       >;
       get: FunctionReference<
@@ -74,14 +55,14 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           ref:
-            | { entryId: string; kind?: string }
+            | { credentialId: string; kind?: string }
             | { kind: string; name: string; owner: string };
         },
         {
           auditReveals: boolean;
           bytes?: number;
           createdAt: number;
-          entryId: string;
+          credentialId: string;
           expiresAt?: number;
           hint?: string;
           kind: string;
@@ -124,7 +105,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             auditReveals: boolean;
             bytes?: number;
             createdAt: number;
-            entryId: string;
+            credentialId: string;
             expiresAt?: number;
             hint?: string;
             kind: string;
@@ -148,42 +129,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
-      listEvents: FunctionReference<
-        "query",
-        "internal",
-        {
-          paginationOpts: {
-            cursor: string | null;
-            endCursor?: string | null;
-            id?: number;
-            maximumBytesRead?: number;
-            maximumRowsRead?: number;
-            numItems: number;
-          };
-          ref: { entryId: string } | { owner: string };
-        },
-        {
-          continueCursor: string;
-          isDone: boolean;
-          page: Array<{
-            actor?: string;
-            at: number;
-            entryId: string;
-            kind: string;
-            owner: string;
-            type:
-              | "created"
-              | "revealed"
-              | "replaced"
-              | "revoked"
-              | "exhausted"
-              | "rekeyed";
-          }>;
-          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
-          splitCursor?: string | null;
-        },
-        Name
-      >;
       replace: FunctionReference<
         "mutation",
         "internal",
@@ -192,7 +137,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           expiresAt?: number;
           graceMs?: number;
           ref:
-            | { entryId: string; kind?: string }
+            | { credentialId: string; kind?: string }
             | { kind: string; name: string; owner: string };
           ttlMs?: number;
           value?: string;
@@ -207,10 +152,10 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           actor?: string;
           includePrevious?: boolean;
           ref:
-            | { entryId: string; kind?: string }
+            | { credentialId: string; kind?: string }
             | { kind: string; name: string; owner: string };
         },
-        { previous?: { validUntil: number; value: string }; value: string },
+        { previous?: { validUntilAt: number; value: string }; value: string },
         Name
       >;
       revoke: FunctionReference<
@@ -219,7 +164,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         {
           actor?: string;
           ref:
-            | { entryId: string; kind?: string }
+            | { credentialId: string; kind?: string }
             | { kind: string; name: string; owner: string };
         },
         null,
@@ -235,7 +180,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           value: string;
         },
         | {
-            entryId: string;
+            credentialId: string;
             kind: string;
             metadata: Record<string, string | number | boolean | null>;
             ok: true;
@@ -249,5 +194,62 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           },
         Name
       >;
+    };
+    events: {
+      list: FunctionReference<
+        "query",
+        "internal",
+        {
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+          ref: { credentialId: string } | { owner: string };
+        },
+        {
+          continueCursor: string;
+          isDone: boolean;
+          page: Array<{
+            actor?: string;
+            credentialId: string;
+            kind: string;
+            occurredAt: number;
+            owner: string;
+            type:
+              | "created"
+              | "revealed"
+              | "replaced"
+              | "revoked"
+              | "exhausted"
+              | "rekeyed";
+          }>;
+          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
+          splitCursor?: string | null;
+        },
+        Name
+      >;
+    };
+    keys: {
+      getStatus: FunctionReference<
+        "query",
+        "internal",
+        {},
+        {
+          activeVersion: number;
+          missingVersions: Array<number>;
+          missingVersionsTruncated: boolean;
+          versions: Array<{
+            encrypted: boolean;
+            hashed: boolean;
+            version: number;
+          }>;
+        },
+        Name
+      >;
+      rotate: FunctionReference<"mutation", "internal", {}, null, Name>;
     };
   };

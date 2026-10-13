@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { runCli } from "./cli.js";
-import { parseKeyring } from "./keyring.js";
+import { readConfig } from "./keyring.js";
 
 it("generates fresh canonical 32-byte keys for the selected version", () => {
   for (const [args, version] of [
@@ -13,7 +13,7 @@ it("generates fresh canonical 32-byte keys for the selected version", () => {
     expect(a.code).toBe(0);
     expect(a.stderr).toBe("");
     expect(a.stdout).not.toBe(b.stdout);
-    const ring = parseKeyring(a.stdout.trim());
+    const ring = readConfig({ VAULT_KEYS: a.stdout.trim() });
     expect(ring.active).toBe(version);
     expect(ring.keys.get(version)).toHaveLength(32);
   }

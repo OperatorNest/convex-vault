@@ -5,13 +5,13 @@ import {
   replaceResultValidator,
   revealResultValidator,
   verifyResultValidator,
-  entryResultValidator,
+  credentialResultValidator,
   eventValidator,
   lifecycleFields,
   metadataValidator,
 } from "@operatornest/convex-vault";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
-import { create as createEntry, kindValidator, revealKindValidator, vault } from "./vault.js";
+import { create as createCredential, kindValidator, revealKindValidator, vault } from "./vault.js";
 
 async function requireOwner(ctx: QueryCtx): Promise<string> {
   const identity = await ctx.auth.getUserIdentity();
@@ -32,7 +32,7 @@ export const create = mutation({
   returns: createResultValidator,
   handler: async (ctx, { kind, ...options }) => {
     const owner = await requireOwner(ctx);
-    return createEntry(ctx, kind, { ...options, owner });
+    return createCredential(ctx, kind, { ...options, owner });
   },
 });
 export const reveal = mutation({
@@ -40,7 +40,13 @@ export const reveal = mutation({
   returns: revealResultValidator,
   handler: async (ctx, { includePrevious, ...ref }) => {
     const owner = await requireOwner(ctx);
-    return vault.reveal(ctx, { ...ref, owner }, { includePrevious });
+    return vault.credentials.reveal(ctx, {
+      includePrevious,
+      ref: {
+        ...ref,
+        owner,
+      },
+    });
   },
 });
 // Passing owner stops a presented token from consuming another owner's uses.
@@ -53,7 +59,12 @@ export const verify = mutation({
   returns: verifyResultValidator,
   handler: async (ctx, { kind, value, requiredScopes }) => {
     const owner = await requireOwner(ctx);
-    return vault.verify(ctx, kind, value, { owner, requiredScopes });
+    return vault.credentials.verify(ctx, {
+      owner,
+      requiredScopes,
+      kind,
+      value,
+    });
   },
 });
 export const replace = mutation({
@@ -68,7 +79,7 @@ export const replace = mutation({
   returns: replaceResultValidator,
   handler: async (ctx, { kind, name, ...options }) => {
     const owner = await requireOwner(ctx);
-    return vault.replace(ctx, { kind, name, owner }, options);
+    return vault.credentials.replace(ctx, { ...options, ref: { kind, name, owner } });
   },
 });
 export const revoke = mutation({
@@ -76,23 +87,23 @@ export const revoke = mutation({
   returns: v.null(),
   handler: async (ctx, ref) => {
     const owner = await requireOwner(ctx);
-    return vault.revoke(ctx, { ...ref, owner });
+    return vault.credentials.revoke(ctx, { ref: { ...ref, owner } });
   },
 });
 export const get = query({
   args: { kind: kindValidator, name: v.string() },
-  returns: entryResultValidator,
+  returns: credentialResultValidator,
   handler: async (ctx, ref) => {
     const owner = await requireOwner(ctx);
-    return vault.get(ctx, { ...ref, owner });
+    return vault.credentials.get(ctx, { ref: { ...ref, owner } });
   },
 });
 export const list = query({
   args: { kind: v.optional(kindValidator), paginationOpts: paginationOptsValidator },
-  returns: paginationResultValidator(entryResultValidator),
+  returns: paginationResultValidator(credentialResultValidator),
   handler: async (ctx, options) => {
     const owner = await requireOwner(ctx);
-    return vault.list(ctx, { ...options, owner });
+    return vault.credentials.list(ctx, { ...options, owner });
   },
 });
 export const listEvents = query({
@@ -100,6 +111,6 @@ export const listEvents = query({
   returns: paginationResultValidator(eventValidator),
   handler: async (ctx, { paginationOpts }) => {
     const owner = await requireOwner(ctx);
-    return vault.listEvents(ctx, { owner }, paginationOpts);
+    return vault.events.list(ctx, { ref: { owner }, paginationOpts: paginationOpts });
   },
 });

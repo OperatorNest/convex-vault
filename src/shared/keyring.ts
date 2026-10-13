@@ -2,7 +2,8 @@ import { base64urlDecode, base64urlEncode, utf8 } from "./base64url.js";
 import { vaultError } from "./errors.js";
 
 export type Keyring = { active: number; keys: Map<number, Uint8Array<ArrayBuffer>> };
-export function parseKeyring(config: string | undefined): Keyring {
+export function readConfig(env: { VAULT_KEYS?: string }): Keyring {
+  const config = env.VAULT_KEYS;
   try {
     if (!config) throw vaultError("VAULT_NOT_CONFIGURED");
     const keys = new Map<number, Uint8Array<ArrayBuffer>>();

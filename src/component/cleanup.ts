@@ -5,7 +5,9 @@ import { internal } from "./_generated/api.js";
 import { deleteValues, keyring } from "./helpers.js";
 import schema from "./schema.js";
 
-const DAY = 86400000;
+const DAY_MS = 86400000;
+const CREDENTIAL_RETENTION_DAYS = 30;
+const EVENT_RETENTION_DAYS = 90;
 const phaseValidator = v.union(
   v.literal("exhausted"),
   v.literal("revoked"),
@@ -21,51 +23,51 @@ const NEXT_PHASE = {
   previous: "events",
   events: undefined,
 } as const satisfies Record<Phase, Phase | undefined>;
-// At most two values per entry: 50 entries means at most 100 value deletions.
+// At most two values per credential: 50 credentials means at most 100 value deletions.
 async function batch(
   ctx: MutationCtx,
   phase: Phase,
   cursor: string | null,
   now: number,
 ): Promise<void> {
-  const retainedAfter = now - 30 * DAY;
+  const retainedAfter = now - CREDENTIAL_RETENTION_DAYS * DAY_MS;
   const pages = paginator(ctx.db, schema);
   let page;
   if (phase === "exhausted" || phase === "revoked") {
     page = await pages
-      .query("entries")
+      .query("credentials")
       .withIndex("by_status_and_updatedAt", (q) =>
         phase === "exhausted"
           ? q.eq("status", phase)
           : q.eq("status", phase).lte("updatedAt", retainedAfter),
       )
       .paginate({ numItems: 50, cursor });
-    for (const entry of page.page) {
-      await deleteValues(ctx, entry);
-      if (entry.updatedAt <= retainedAfter) await ctx.db.delete("entries", entry._id);
+    for (const credential of page.page) {
+      await deleteValues(ctx, credential);
+      if (credential.updatedAt <= retainedAfter) await ctx.db.delete("credentials", credential._id);
     }
   } else if (phase === "expired") {
     page = await pages
-      .query("entries")
+      .query("credentials")
       .withIndex("by_expiresAt", (q) => q.gt("expiresAt", undefined).lte("expiresAt", now))
       .paginate({ numItems: 50, cursor });
-    for (const entry of page.page) {
-      if (entry.status !== "active") continue;
-      await deleteValues(ctx, entry);
-      if (entry.expiresAt !== undefined && entry.expiresAt <= retainedAfter)
-        await ctx.db.delete("entries", entry._id);
+    for (const credential of page.page) {
+      if (credential.status !== "active") continue;
+      await deleteValues(ctx, credential);
+      if (credential.expiresAt !== undefined && credential.expiresAt <= retainedAfter)
+        await ctx.db.delete("credentials", credential._id);
     }
   } else if (phase === "previous") {
     page = await pages
       .query("values")
-      .withIndex("by_validUntil", (q) => q.gt("validUntil", undefined).lte("validUntil", now))
+      .withIndex("by_validUntilAt", (q) => q.gt("validUntilAt", undefined).lte("validUntilAt", now))
       .paginate({ numItems: 100, cursor });
     for (const row of page.page)
       if (row.state === "previous") await ctx.db.delete("values", row._id);
   } else {
     const rows = await ctx.db
       .query("events")
-      .withIndex("by_at", (q) => q.lt("at", now - 90 * DAY))
+      .withIndex("by_occurredAt", (q) => q.lt("occurredAt", now - EVENT_RETENTION_DAYS * DAY_MS))
       .take(100);
     for (const row of rows) await ctx.db.delete("events", row._id);
     if (rows.length === 100)

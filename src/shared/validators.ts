@@ -12,7 +12,7 @@ export const metadataValidator = v.record(
   v.union(v.string(), v.number(), v.boolean(), v.null()),
 );
 export const referenceValidator = v.union(
-  v.object({ entryId: v.string(), kind: v.optional(v.string()) }),
+  v.object({ credentialId: v.string(), kind: v.optional(v.string()) }),
   v.object({ owner: v.string(), kind: v.string(), name: v.string() }),
 );
 export const lifecycleFields = {
@@ -20,8 +20,27 @@ export const lifecycleFields = {
   expiresAt: v.optional(v.number()),
   maxUses: v.optional(v.number()),
 };
-export const entryValidator = v.object({
-  entryId: v.string(),
+export const credentialStatusValidator = v.union(
+  v.literal("active"),
+  v.literal("revoked"),
+  v.literal("exhausted"),
+);
+export const valueStateValidator = v.union(v.literal("current"), v.literal("previous"));
+export const eventTypeValidator = v.union(
+  v.literal("created"),
+  v.literal("revealed"),
+  v.literal("replaced"),
+  v.literal("revoked"),
+  v.literal("exhausted"),
+  v.literal("rekeyed"),
+);
+export const verificationFailureReasonValidator = v.union(
+  v.literal("not_found"),
+  v.literal("expired"),
+  v.literal("exhausted"),
+  v.literal("missing_scope"),
+);
+export const credentialValidator = v.object({
   owner: v.string(),
   kind: v.string(),
   name: v.optional(v.string()),
@@ -32,7 +51,7 @@ export const entryValidator = v.object({
   prefix: v.optional(v.string()),
   bytes: v.optional(v.number()),
   hint: v.boolean(),
-  status: v.union(v.literal("active"), v.literal("revoked"), v.literal("exhausted")),
+  status: credentialStatusValidator,
   scopes: v.array(v.string()),
   metadata: metadataValidator,
   expiresAt: v.optional(v.number()),
@@ -43,38 +62,31 @@ export const entryValidator = v.object({
   createdAt: v.number(),
   updatedAt: v.number(),
 });
-export const entryResultValidator = entryValidator
+export const credentialResultValidator = credentialValidator
   .omit("hint")
-  .extend({ hint: v.optional(v.string()) });
+  .extend({ credentialId: v.string(), hint: v.optional(v.string()) });
 export const eventValidator = v.object({
-  entryId: v.string(),
+  credentialId: v.string(),
   owner: v.string(),
   kind: v.string(),
-  type: v.union(
-    v.literal("created"),
-    v.literal("revealed"),
-    v.literal("replaced"),
-    v.literal("revoked"),
-    v.literal("exhausted"),
-    v.literal("rekeyed"),
-  ),
+  type: eventTypeValidator,
   actor: v.optional(v.string()),
-  at: v.number(),
+  occurredAt: v.number(),
 });
 export const createResultValidator = v.object({
-  entryId: v.string(),
+  credentialId: v.string(),
   value: v.optional(v.string()),
   hint: v.optional(v.string()),
 });
-export const replaceResultValidator = createResultValidator.omit("entryId");
+export const replaceResultValidator = createResultValidator.omit("credentialId");
 export const revealResultValidator = v.object({
   value: v.string(),
-  previous: v.optional(v.object({ value: v.string(), validUntil: v.number() })),
+  previous: v.optional(v.object({ value: v.string(), validUntilAt: v.number() })),
 });
 export const verifyResultValidator = v.union(
   v.object({
     ok: v.literal(true),
-    entryId: v.string(),
+    credentialId: v.string(),
     owner: v.string(),
     kind: v.string(),
     scopes: v.array(v.string()),
@@ -83,20 +95,45 @@ export const verifyResultValidator = v.union(
   }),
   v.object({
     ok: v.literal(false),
-    reason: v.union(
-      v.literal("not_found"),
-      v.literal("expired"),
-      v.literal("exhausted"),
-      v.literal("missing_scope"),
-    ),
+    reason: verificationFailureReasonValidator,
   }),
 );
+/** Selects ciphertext, keyed hash or both for credential values. */
 export type Storage = Infer<typeof storageValidator>;
+/** Selects owner-scoped or global credential value lookup. */
 export type Lookup = Infer<typeof lookupValidator>;
+/** Identifies a credential by row ID or owner, kind and name. */
 export type Reference = Infer<typeof referenceValidator>;
+/** Stores caller-supplied plaintext scalar metadata on a credential. */
 export type Metadata = Infer<typeof metadataValidator>;
-export type Entry = Infer<typeof entryResultValidator>;
+/** Describes stored credential policy, lifecycle and disclosure hint. */
+export type Credential = Infer<typeof credentialResultValidator>;
+/** Returns a new credential row ID and any generated plaintext and hint. */
 export type CreateResult = Infer<typeof createResultValidator>;
+/** Returns any generated replacement plaintext and disclosure hint. */
 export type ReplaceResult = Infer<typeof replaceResultValidator>;
+/** Returns current plaintext and any requested previous plaintext during grace. */
 export type RevealResult = Infer<typeof revealResultValidator>;
+/** Reports verified credential ownership and scopes or a verification failure. */
 export type VerifyResult = Infer<typeof verifyResultValidator>;
+
+/** Distinguishes generated credential values from supplied values. */
+export type Origin = Infer<typeof originValidator>;
+
+/** Tracks active credentials and their terminal revoked or exhausted state. */
+export type CredentialStatus = Infer<typeof credentialStatusValidator>;
+
+/** Distinguishes the current value from a previous value retained during grace. */
+export type ValueState = Infer<typeof valueStateValidator>;
+
+/** Identifies the credential operation recorded by an audit event. */
+export type EventType = Infer<typeof eventTypeValidator>;
+
+/** Identifies why a presented credential value did not verify. */
+export type VerificationFailureReason = Infer<typeof verificationFailureReasonValidator>;
+
+/** Records a credential operation and its optional authorized actor. */
+export type VaultEvent = Infer<typeof eventValidator>;
+
+/** Identifies whether a stored-row page recommends or requires splitting its cursor range. */
+export type PageStatus = "SplitRecommended" | "SplitRequired";

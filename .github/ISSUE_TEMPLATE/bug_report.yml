@@ -6,7 +6,7 @@ body:
     id: package_version
     attributes:
       label: Package version
-      placeholder: e.g. 0.2.1, or commit SHA for an unreleased checkout
+      placeholder: 0.3.0, or an unreleased commit SHA
     validations:
       required: true
   - type: input
@@ -24,29 +24,36 @@ body:
   - type: dropdown
     id: runtime
     attributes:
-      label: Deployment type
-      options: [Convex Cloud, Self-hosted, Local backend]
+      label: Convex runtime
+      options: [Convex cloud, Self-hosted, Local backend]
     validations:
       required: true
+  - type: input
+    id: browser_version
+    attributes:
+      label: Browser and version
+      description: Include when relevant.
+    validations:
+      required: false
   - type: input
     id: operating_system
     attributes:
       label: Operating system and version
-      description: Fill in for CLI or local-backend failures; otherwise leave blank.
+      description: Include when relevant.
     validations:
       required: false
   - type: input
-    id: kind_policy
+    id: operation
     attributes:
-      label: Storage, origin and lookup policy
-      description: Include only policy settings, never values or keys.
+      label: Client method or component operation
+      description: Include the method and argument names; redact values.
     validations:
-      required: false
+      required: true
   - type: textarea
     id: reproduction
     attributes:
       label: Minimal reproduction
-      description: Include the smallest code or steps that reproduce the issue. Replace keys, credential values and customer data with placeholders.
+      description: Include the smallest code or steps that reproduce the issue. Redact sensitive data.
     validations:
       required: true
   - type: textarea
@@ -65,7 +72,7 @@ body:
     id: logs
     attributes:
       label: Optional logs
-      description: Do not include secrets or credentials (including master keys and tokens), plaintext values, lookup hashes, customer data, or personal information.
+      description: Do not include credentials, keys, tokens, endpoints, plaintext values, lookup hashes, payloads, customer data or personal information.
     validations:
       required: false
   - type: checkboxes

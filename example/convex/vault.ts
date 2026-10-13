@@ -5,17 +5,32 @@ import type { MutationCtx } from "./_generated/server.js";
 
 export const vault = new Vault(components.vault, {
   kinds: {
-    providerKey: { storage: "encrypted" },
-    signingSecret: { storage: "encrypted", generate: { prefix: "sig_" } },
-    sharedToken: { storage: "hashed" },
-    apiKey: { storage: "hashed", generate: { prefix: "sk_" } },
-    importedKey: { storage: "both" },
-    dashboardKey: { storage: "both", generate: { prefix: "dash_" } },
+    providerKey: { storage: "encrypted", hint: false, auditReveals: true, lookup: "owner" },
+    signingKey: {
+      storage: "encrypted",
+      generate: { prefix: "sig_", bytes: 32 },
+      hint: true,
+      auditReveals: true,
+    },
+    sharedToken: { storage: "hashed", hint: false, auditReveals: true, lookup: "owner" },
+    apiKey: {
+      storage: "hashed",
+      generate: { prefix: "sk_", bytes: 32 },
+      hint: true,
+      auditReveals: true,
+    },
+    importedKey: { storage: "both", hint: false, auditReveals: true, lookup: "owner" },
+    dashboardKey: {
+      storage: "both",
+      generate: { prefix: "dash_", bytes: 32 },
+      hint: true,
+      auditReveals: true,
+    },
   },
 });
 export const kindValidator = v.union(
   v.literal("providerKey"),
-  v.literal("signingSecret"),
+  v.literal("signingKey"),
   v.literal("sharedToken"),
   v.literal("apiKey"),
   v.literal("importedKey"),
@@ -23,7 +38,7 @@ export const kindValidator = v.union(
 );
 export const revealKindValidator = v.union(
   v.literal("providerKey"),
-  v.literal("signingSecret"),
+  v.literal("signingKey"),
   v.literal("importedKey"),
   v.literal("dashboardKey"),
 );
@@ -46,12 +61,16 @@ export function create(
     case "sharedToken":
     case "importedKey":
       if (value === undefined) throw new ConvexError("A supplied kind needs a value");
-      return vault.create(ctx, kind, { ...common, value });
-    case "signingSecret":
+      return vault.credentials.create(ctx, {
+        ...common,
+        value,
+        kind,
+      });
+    case "signingKey":
     case "apiKey":
     case "dashboardKey":
       if (value !== undefined) throw new ConvexError("A generated kind does not accept a value");
-      return vault.create(ctx, kind, common);
+      return vault.credentials.create(ctx, { ...common, kind: kind });
   }
   throw new ConvexError("Unknown kind");
 }

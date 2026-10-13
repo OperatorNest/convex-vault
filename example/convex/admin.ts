@@ -5,14 +5,14 @@ import {
   replaceResultValidator,
   revealResultValidator,
   verifyResultValidator,
-  entryResultValidator,
+  credentialResultValidator,
   eventValidator,
   lifecycleFields,
   metadataValidator,
 } from "@operatornest/convex-vault";
 import { internalMutation, internalQuery } from "./_generated/server.js";
 import {
-  create as createEntry,
+  create as createCredential,
   kindValidator,
   revealKindValidator,
   verifyKindValidator,
@@ -20,11 +20,11 @@ import {
 } from "./vault.js";
 
 const referenceValidator = v.union(
-  v.object({ entryId: v.string() }),
+  v.object({ credentialId: v.string() }),
   v.object({ owner: v.string(), kind: kindValidator, name: v.string() }),
 );
 const revealReferenceValidator = v.union(
-  v.object({ entryId: v.string() }),
+  v.object({ credentialId: v.string() }),
   v.object({ owner: v.string(), kind: revealKindValidator, name: v.string() }),
 );
 
@@ -41,7 +41,7 @@ export const create = internalMutation({
     actor: v.optional(v.string()),
   },
   returns: createResultValidator,
-  handler: (ctx, { kind, ...options }) => createEntry(ctx, kind, options),
+  handler: (ctx, { kind, ...options }) => createCredential(ctx, kind, options),
 });
 export const reveal = internalMutation({
   args: {
@@ -50,7 +50,7 @@ export const reveal = internalMutation({
     actor: v.optional(v.string()),
   },
   returns: revealResultValidator,
-  handler: (ctx, { ref, ...options }) => vault.reveal(ctx, ref, options),
+  handler: (ctx, { ref, ...options }) => vault.credentials.reveal(ctx, { ...options, ref: ref }),
 });
 export const verify = internalMutation({
   args: {
@@ -62,8 +62,18 @@ export const verify = internalMutation({
   returns: verifyResultValidator,
   handler: (ctx, { kind, value, owner, requiredScopes }) => {
     if (kind === "sharedToken" || kind === "importedKey")
-      return vault.verify(ctx, kind, value, { owner: owner ?? "", requiredScopes });
-    return vault.verify(ctx, kind, value, { owner, requiredScopes });
+      return vault.credentials.verify(ctx, {
+        owner: owner ?? "",
+        requiredScopes,
+        kind,
+        value,
+      });
+    return vault.credentials.verify(ctx, {
+      owner,
+      requiredScopes,
+      kind,
+      value,
+    });
   },
 });
 export const replace = internalMutation({
@@ -76,17 +86,17 @@ export const replace = internalMutation({
     actor: v.optional(v.string()),
   },
   returns: replaceResultValidator,
-  handler: (ctx, { ref, ...options }) => vault.replace(ctx, ref, options),
+  handler: (ctx, { ref, ...options }) => vault.credentials.replace(ctx, { ...options, ref: ref }),
 });
 export const revoke = internalMutation({
   args: { ref: referenceValidator, actor: v.optional(v.string()) },
   returns: v.null(),
-  handler: (ctx, { ref, ...options }) => vault.revoke(ctx, ref, options),
+  handler: (ctx, { ref, ...options }) => vault.credentials.revoke(ctx, { ...options, ref: ref }),
 });
 export const get = internalQuery({
   args: { ref: referenceValidator },
-  returns: entryResultValidator,
-  handler: (ctx, { ref }) => vault.get(ctx, ref),
+  returns: credentialResultValidator,
+  handler: (ctx, { ref }) => vault.credentials.get(ctx, { ref: ref }),
 });
 export const list = internalQuery({
   args: {
@@ -94,16 +104,17 @@ export const list = internalQuery({
     kind: v.optional(kindValidator),
     paginationOpts: paginationOptsValidator,
   },
-  returns: paginationResultValidator(entryResultValidator),
-  handler: (ctx, options) => vault.list(ctx, options),
+  returns: paginationResultValidator(credentialResultValidator),
+  handler: (ctx, options) => vault.credentials.list(ctx, options),
 });
 export const listEvents = internalQuery({
   args: {
-    ref: v.union(v.object({ entryId: v.string() }), v.object({ owner: v.string() })),
+    ref: v.union(v.object({ credentialId: v.string() }), v.object({ owner: v.string() })),
     paginationOpts: paginationOptsValidator,
   },
   returns: paginationResultValidator(eventValidator),
-  handler: (ctx, { ref, paginationOpts }) => vault.listEvents(ctx, ref, paginationOpts),
+  handler: (ctx, { ref, paginationOpts }) =>
+    vault.events.list(ctx, { ref: ref, paginationOpts: paginationOpts }),
 });
 export const keyStatus = internalQuery({
   args: {},
@@ -115,10 +126,10 @@ export const keyStatus = internalQuery({
     missingVersions: v.array(v.number()),
     missingVersionsTruncated: v.boolean(),
   }),
-  handler: (ctx) => vault.keyStatus(ctx),
+  handler: (ctx) => vault.keys.getStatus(ctx),
 });
 export const rotateKeys = internalMutation({
   args: {},
   returns: v.null(),
-  handler: (ctx) => vault.rotateKeys(ctx),
+  handler: (ctx) => vault.keys.rotate(ctx),
 });

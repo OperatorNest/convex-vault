@@ -85,7 +85,7 @@ it("drives all six kinds through the internal server-side wrappers", async () =>
   const t = setup();
   for (const [kind, storage, generated] of [
     ["providerKey", "encrypted", false],
-    ["signingSecret", "encrypted", true],
+    ["signingKey", "encrypted", true],
     ["sharedToken", "hashed", false],
     ["apiKey", "hashed", true],
     ["importedKey", "both", false],
@@ -96,7 +96,7 @@ it("drives all six kinds through the internal server-side wrappers", async () =>
       owner: "tenant",
       ...(generated ? {} : { value: `first-${kind}` }),
     });
-    const ref = { entryId: created.entryId };
+    const ref = { credentialId: created.credentialId };
     const first = created.value ?? `first-${kind}`;
     if (storage !== "hashed")
       expect(await t.mutation(internal.admin.reveal, { ref })).toEqual({ value: first });

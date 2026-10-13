@@ -2,7 +2,7 @@
 
 ## Decision
 
-Generated kinds always use global lookup. Supplied kinds default to owner lookup; an explicit global supplied kind requires values at least 32 characters long. Persist storage, origin and lookup as immutable policy on a kind's first creation. Lookup HMAC input is UTF-8 JSON `["convex-vault",1,kind,lookupOwner,value]`, where global lookup uses the empty string for lookupOwner.
+Generated kinds always use global lookup. Supplied kinds require an explicit lookup policy; a global supplied kind requires values at least 32 characters long. Persist storage, origin and lookup as immutable policy on a kind's first creation. Lookup HMAC input is UTF-8 JSON `["convex-vault",1,kind,lookupOwner,value]`, where global lookup uses the empty string for lookupOwner.
 
 Create and replace probe every configured hash version in the same transaction as insertion. Current and previous values reserve uniqueness until deletion, including expired values.
 

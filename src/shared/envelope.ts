@@ -2,7 +2,7 @@ import { base64urlDecode, base64urlEncode, utf8 } from "./base64url.js";
 import { vaultError } from "./errors.js";
 import { deriveKeyBytes, masterKey, type Keyring } from "./keyring.js";
 
-export type Identity = { owner: string; kind: string; entryId: string; valueId: string };
+export type Identity = { owner: string; kind: string; credentialId: string; valueId: string };
 export type Envelope = {
   keyVersion: number;
   ciphertext: string;
@@ -11,12 +11,12 @@ export type Envelope = {
   keyIv: string;
 };
 function aad(identity: Identity, version?: number): Uint8Array<ArrayBuffer> {
-  const { owner, kind, entryId, valueId } = identity;
+  const { owner, kind, credentialId, valueId } = identity;
   return utf8(
     JSON.stringify(
       version === undefined
-        ? ["convex-vault", 1, "value", owner, kind, entryId, valueId]
-        : ["convex-vault", 1, "key", owner, kind, entryId, valueId, version],
+        ? ["convex-vault", 1, "value", owner, kind, credentialId, valueId]
+        : ["convex-vault", 1, "key", owner, kind, credentialId, valueId, version],
     ),
   );
 }

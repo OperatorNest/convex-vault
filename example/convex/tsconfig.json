@@ -7,8 +7,11 @@
     "lib": ["ES2023", "DOM"],
     "skipLibCheck": true,
     "module": "ESNext",
-    "noEmit": true
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true
   },
   "include": ["./**/*"],
-  "exclude": ["./_generated"]
+  "exclude": ["./_generated", "./**/*.test.ts"]
 }

@@ -67,8 +67,8 @@
   "scripts": {
     "build:codegen": "node scripts/with-local-lock.mjs pnpm run build:codegen:locked",
     "build:codegen:locked": "convex codegen --component-dir ./src/component && pnpm build && convex codegen",
-    "build": "node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
-    "build:clean": "rm -rf dist *.tsbuildinfo && pnpm build:codegen",
+    "build": "rm -rf dist *.tsbuildinfo && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
+    "build:clean": "pnpm build",
     "typecheck": "node node_modules/@typescript/native/bin/tsc --noEmit && node node_modules/@typescript/native/bin/tsc -p tsconfig.test.json",
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
     "fmt": "oxfmt .",
