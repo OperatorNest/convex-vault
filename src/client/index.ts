@@ -18,7 +18,7 @@ export {
   lookupValidator,
   metadataValidator,
   referenceValidator,
-  lifecycleFields,
+  lifecycleValidator,
   credentialStatusValidator,
   valueStateValidator,
   eventTypeValidator,
@@ -141,6 +141,12 @@ export class Vault<const K extends Record<string, KindOptions> = Record<string, 
     options?: VaultOptions<K>,
   ) {
     this.options = options ?? { kinds: {} };
+    const kinds = Object.entries(this.options.kinds);
+    if (
+      kinds.some(([kind]) => kind.length === 0 || kind.length > 128) ||
+      kinds.filter(([, policy]) => policy.auditReveals).length > 100
+    )
+      throw vaultError("VAULT_INVALID_ARGUMENT");
   }
   /** Creates, reveals, verifies, replaces, revokes, reads and lists encrypted credentials. */
   readonly credentials = {

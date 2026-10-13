@@ -8,7 +8,7 @@ import {
   credentialResultValidator,
   eventValidator,
   keyStatusResultValidator,
-  lifecycleFields,
+  lifecycleValidator,
   metadataValidator,
 } from "@operatornest/convex-vault";
 import { internalMutation, internalQuery } from "./_generated/server.js";
@@ -38,7 +38,7 @@ export const create = internalMutation({
     label: v.optional(v.string()),
     scopes: v.optional(v.array(v.string())),
     metadata: v.optional(metadataValidator),
-    ...lifecycleFields,
+    ...lifecycleValidator.fields,
     actor: v.optional(v.string()),
   },
   returns: createResultValidator,

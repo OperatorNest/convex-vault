@@ -152,7 +152,7 @@ it("cleanup keeps an expired credential 30 days after expiry, not after its last
   await drain(t);
   await expectVaultError(t.query(api.credentials.get, { ref }), "VAULT_NOT_FOUND");
 });
-it("a cleanup run after a completed run visits no finished credential and schedules one continuation per remaining phase", async () => {
+it("a cleanup run after a completed run rewrites no finished credential and reads one batch per phase although 60 finished credentials exceed a batch", async () => {
   const t = setupTest();
   for (let i = 0; i < 180; i++) {
     const created = await t.mutation(api.credentials.create, {
@@ -180,9 +180,11 @@ it("a cleanup run after a completed run visits no finished credential and schedu
   const credentials = await t.run((ctx) => ctx.db.query("credentials").take(1000));
   expect(credentials.filter((credential) => credential.valuesDeletedAt === undefined)).toEqual([]);
   const before = await scheduledCount();
+  vi.setSystemTime(NOW + 2 * DAY);
   await t.mutation(internal.cleanup.run, {});
   await drain(t);
   expect((await scheduledCount()) - before).toBe(6);
+  expect(await t.run((ctx) => ctx.db.query("credentials").take(1000))).toEqual(credentials);
 });
 it("cleanup deletes the values of a renewed credential again after its renewed expiry", async () => {
   const t = setupTest();
@@ -222,4 +224,52 @@ it("cleanup deletes the values of a renewed credential again after its renewed e
   await drain(t);
   expect(await t.run((ctx) => ctx.db.query("values").take(1))).toEqual([]);
   expect(await credential()).toHaveProperty("valuesDeletedAt", NOW + 1001);
+});
+it("verify returns expired or exhausted until cleanup deletes the lookup hashes, then not_found", async () => {
+  const t = setupTest();
+  const create = (options: { ttlMs?: number; maxUses?: number }) =>
+    t.mutation(api.credentials.create, {
+      bytes: 32,
+      hint: false,
+      auditReveals: false,
+      owner: "tenant",
+      kind: "key",
+      storage: "hashed",
+      origin: "generated",
+      lookup: "global",
+      ...options,
+    });
+  const verify = (value: string | undefined) =>
+    t.mutation(api.credentials.verify, { kind: "key", value: required(value, "generated value") });
+  const expired = await create({ ttlMs: 1 });
+  const exhausted = await create({ maxUses: 1 });
+  expect(await verify(exhausted.value)).toEqual(expect.objectContaining({ ok: true }));
+  vi.setSystemTime(NOW + 2);
+  expect(await verify(expired.value)).toEqual({ ok: false, reason: "expired" });
+  expect(await verify(exhausted.value)).toEqual({ ok: false, reason: "exhausted" });
+  await t.mutation(internal.cleanup.run, {});
+  await drain(t);
+  expect(await verify(expired.value)).toEqual({ ok: false, reason: "not_found" });
+  expect(await verify(exhausted.value)).toEqual({ ok: false, reason: "not_found" });
+});
+it("cleanup deletes expired values and old events without a configured keyring", async () => {
+  const t = setupTest();
+  await t.mutation(api.credentials.create, {
+    bytes: 32,
+    hint: false,
+    auditReveals: false,
+    owner: "tenant",
+    kind: "key",
+    storage: "encrypted",
+    origin: "generated",
+    lookup: "global",
+    ttlMs: 1,
+  });
+  vi.stubEnv("VAULT_KEYS", undefined);
+  vi.setSystemTime(NOW + 90 * DAY + 1);
+  await t.mutation(internal.cleanup.run, {});
+  await drain(t);
+  expect(await t.run((ctx) => ctx.db.query("values").take(10))).toEqual([]);
+  expect(await t.run((ctx) => ctx.db.query("events").take(10))).toEqual([]);
+  expect(await t.run((ctx) => ctx.db.query("credentials").take(10))).toEqual([]);
 });

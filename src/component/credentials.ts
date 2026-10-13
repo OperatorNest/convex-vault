@@ -36,7 +36,7 @@ import {
   lookupValidator,
   metadataValidator,
   referenceValidator,
-  lifecycleFields,
+  lifecycleValidator,
   credentialResultValidator,
   createResultValidator,
   replaceResultValidator,
@@ -62,7 +62,7 @@ export const create = mutation({
     scopes: v.optional(v.array(v.string())),
     metadata: v.optional(metadataValidator),
     actor: v.optional(v.string()),
-    ...lifecycleFields,
+    ...lifecycleValidator.fields,
   },
   returns: createResultValidator,
   handler: async (ctx, args) => {

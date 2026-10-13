@@ -5,7 +5,7 @@ import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { boundedPage } from "../shared/bounds.js";
-import { deleteValues, keyring } from "./helpers.js";
+import { deleteValues } from "./helpers.js";
 import schema from "./schema.js";
 
 const DAY_MS = 86400000;
@@ -94,8 +94,7 @@ async function batch(
       .query("values")
       .withIndex("by_validUntilAt", (q) => q.gt("validUntilAt", undefined).lte("validUntilAt", now))
       .paginate(boundedPage({ numItems: 100, cursor }));
-    for (const row of page.page)
-      if (row.state === "previous") await ctx.db.delete("values", row._id);
+    for (const row of page.page) await ctx.db.delete("values", row._id);
     ({ isDone, continueCursor } = page);
   } else {
     const page = await credentialPage(
@@ -119,7 +118,6 @@ export const run = internalMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    keyring();
     await batch(ctx, PHASES[0], null, Date.now());
     return null;
   },
@@ -128,7 +126,6 @@ export const continueCleanup = internalMutation({
   args: { phase: phaseValidator, cursor: v.union(v.string(), v.null()), now: v.number() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    keyring();
     await batch(ctx, args.phase, args.cursor, args.now);
     return null;
   },

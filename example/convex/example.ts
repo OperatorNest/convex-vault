@@ -7,7 +7,7 @@ import {
   verifyResultValidator,
   credentialResultValidator,
   eventValidator,
-  lifecycleFields,
+  lifecycleValidator,
   metadataValidator,
 } from "@operatornest/convex-vault";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
@@ -27,7 +27,7 @@ export const create = mutation({
     label: v.optional(v.string()),
     scopes: v.optional(v.array(v.string())),
     metadata: v.optional(metadataValidator),
-    ...lifecycleFields,
+    ...lifecycleValidator.fields,
   },
   returns: createResultValidator,
   handler: async (ctx, { kind, ...options }) => {

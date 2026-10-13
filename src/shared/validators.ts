@@ -1,31 +1,40 @@
 import { v, type Infer } from "convex/values";
 
+/** Validates a kind's credential value storage: `encrypted`, `hashed` or `both`. */
 export const storageValidator = v.union(
   v.literal("encrypted"),
   v.literal("hashed"),
   v.literal("both"),
 );
+/** Validates whether a credential value was `generated` by the vault or `supplied` by the caller. */
 export const originValidator = v.union(v.literal("generated"), v.literal("supplied"));
+/** Validates whether verification looks up supplied values per `owner` or across every owner (`global`). */
 export const lookupValidator = v.union(v.literal("owner"), v.literal("global"));
+/** Validates plaintext credential metadata: a record of string, number, boolean or null values. */
 export const metadataValidator = v.record(
   v.string(),
   v.union(v.string(), v.number(), v.boolean(), v.null()),
 );
+/** Validates a credential reference: `{ credentialId, kind? }` or `{ owner, kind, name }`. */
 export const referenceValidator = v.union(
   v.object({ credentialId: v.string(), kind: v.optional(v.string()) }),
   v.object({ owner: v.string(), kind: v.string(), name: v.string() }),
 );
-export const lifecycleFields = {
+/** Validates the optional `ttlMs`, `expiresAt` and `maxUses` lifecycle arguments; spread its `.fields` into function arguments. */
+export const lifecycleValidator = v.object({
   ttlMs: v.optional(v.number()),
   expiresAt: v.optional(v.number()),
   maxUses: v.optional(v.number()),
-};
+});
+/** Validates a credential status: `active`, `revoked` or `exhausted`. */
 export const credentialStatusValidator = v.union(
   v.literal("active"),
   v.literal("revoked"),
   v.literal("exhausted"),
 );
+/** Validates a value state: `current`, or `previous` during grace. */
 export const valueStateValidator = v.union(v.literal("current"), v.literal("previous"));
+/** Validates the credential operation an audit event records. */
 export const eventTypeValidator = v.union(
   v.literal("created"),
   v.literal("revealed"),
@@ -34,6 +43,7 @@ export const eventTypeValidator = v.union(
   v.literal("exhausted"),
   v.literal("rekeyed"),
 );
+/** Validates why verification failed: `not_found`, `expired`, `exhausted` or `missing_scope`. */
 export const verificationFailureReasonValidator = v.union(
   v.literal("not_found"),
   v.literal("expired"),
@@ -63,9 +73,11 @@ export const credentialValidator = v.object({
   updatedAt: v.number(),
   valuesDeletedAt: v.optional(v.number()),
 });
+/** Validates the stored credential metadata and current hint that `credentials.get` and `credentials.list` return. */
 export const credentialResultValidator = credentialValidator
   .omit("hint", "valuesDeletedAt")
   .extend({ credentialId: v.string(), hint: v.optional(v.string()) });
+/** Validates an audit event that `events.list` returns. */
 export const eventValidator = v.object({
   credentialId: v.string(),
   owner: v.string(),
@@ -74,16 +86,20 @@ export const eventValidator = v.object({
   actor: v.optional(v.string()),
   occurredAt: v.number(),
 });
+/** Validates the `credentials.create` result: the credential row ID and any generated plaintext and hint. */
 export const createResultValidator = v.object({
   credentialId: v.string(),
   value: v.optional(v.string()),
   hint: v.optional(v.string()),
 });
+/** Validates the `credentials.replace` result: any generated replacement plaintext and hint. */
 export const replaceResultValidator = createResultValidator.omit("credentialId");
+/** Validates the `credentials.reveal` result: the current plaintext and any requested previous plaintext. */
 export const revealResultValidator = v.object({
   value: v.string(),
   previous: v.optional(v.object({ value: v.string(), validUntilAt: v.number() })),
 });
+/** Validates the `credentials.verify` result: the verified credential or a failure reason. */
 export const verifyResultValidator = v.union(
   v.object({
     ok: v.literal(true),
@@ -99,6 +115,7 @@ export const verifyResultValidator = v.union(
     reason: verificationFailureReasonValidator,
   }),
 );
+/** Validates the `keys.getStatus` result: configured versions and the versions stored values reference. */
 export const keyStatusResultValidator = v.object({
   activeVersion: v.number(),
   versions: v.array(v.object({ version: v.number(), encrypted: v.boolean(), hashed: v.boolean() })),

@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { truncateText } from "./bounds.js";
 
 // repository-codes:begin
+/** Lists every code a vault error can carry. */
 export const VAULT_ERROR_CODES = [
   "VAULT_NOT_CONFIGURED",
   "VAULT_INVALID_ARGUMENT",

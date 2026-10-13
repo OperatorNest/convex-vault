@@ -49,12 +49,14 @@ export async function projection(
   ctx: QueryCtx,
   credential: Doc<"credentials">,
 ): Promise<Credential> {
-  const row = await ctx.db
-    .query("values")
-    .withIndex("by_credentialId_and_state", (q) =>
-      q.eq("credentialId", credential._id).eq("state", "current"),
-    )
-    .unique();
+  const row = credential.hint
+    ? await ctx.db
+        .query("values")
+        .withIndex("by_credentialId_and_state", (q) =>
+          q.eq("credentialId", credential._id).eq("state", "current"),
+        )
+        .unique()
+    : null;
   return {
     credentialId: credential._id,
     owner: credential.owner,
@@ -76,7 +78,7 @@ export async function projection(
     auditReveals: credential.auditReveals,
     createdAt: credential.createdAt,
     updatedAt: credential.updatedAt,
-    hint: credential.hint ? row?.hint : undefined,
+    hint: row?.hint,
   };
 }
 export function identity(credential: Doc<"credentials">, row: Doc<"values">): Identity {

@@ -358,3 +358,39 @@ it("audits a reveal by credential ID without kind when the client's current poli
   await t.run((ctx) => audited.credentials.reveal(ctx, { ref, actor: "operator" }));
   expect(await revealed()).toMatchObject([{ actor: "operator" }]);
 });
+
+it.each([
+  ["an empty kind name", { "": kinds.provider }],
+  ["a 129-character kind name", { ["k".repeat(129)]: kinds.dual }],
+  [
+    "101 audited kinds",
+    Object.fromEntries(Array.from({ length: 101 }, (_, index) => [`kind${index}`, kinds.provider])),
+  ],
+])("rejects %s at construction", async (_, invalidKinds: Record<string, KindOptions>) => {
+  await expectVaultError(
+    Promise.resolve().then(() => new Vault(components.vault, { kinds: invalidKinds })),
+    "VAULT_INVALID_ARGUMENT",
+  );
+});
+
+it("accepts 100 audited kinds, unlimited unaudited kinds and 128-character kind names", async () => {
+  const t = setup();
+  const boundary = new Vault<Record<string, KindOptions>>(components.vault, {
+    kinds: {
+      ...Object.fromEntries(
+        Array.from({ length: 99 }, (_, index) => [`audited${index}`, kinds.provider]),
+      ),
+      ...Object.fromEntries(
+        Array.from({ length: 50 }, (_, index) => [`unaudited${index}`, kinds.dual]),
+      ),
+      ["k".repeat(128)]: kinds.provider,
+    },
+  });
+  const created = await t.run((ctx) =>
+    boundary.credentials.create(ctx, { kind: "k".repeat(128), owner: "tenant", value: "secret" }),
+  );
+  const revealed = await t.run((ctx) =>
+    boundary.credentials.reveal(ctx, { ref: { credentialId: created.credentialId } }),
+  );
+  expect(revealed.value).toBe("secret");
+});
