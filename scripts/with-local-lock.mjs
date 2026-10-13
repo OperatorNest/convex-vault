@@ -88,13 +88,14 @@ export async function acquireLock() {
   };
 }
 
-// Returns false once no process in the group remains.
+// Returns false once no live process in the group remains. macOS reports EPERM, not ESRCH, for a
+// group whose remaining members are all zombies.
 function signalGroup(pid, signal) {
   try {
     process.kill(-pid, signal);
     return true;
   } catch (error) {
-    if (error?.code === "ESRCH") return false;
+    if (error?.code === "ESRCH" || error?.code === "EPERM") return false;
     throw error;
   }
 }
