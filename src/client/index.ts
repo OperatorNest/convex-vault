@@ -6,7 +6,13 @@ import type {
   PaginationOptions,
 } from "convex/server";
 import type { ComponentApi } from "../component/_generated/component.js";
-import { boundedString, validateGenerate } from "../shared/bounds.js";
+import {
+  boundedString,
+  expiry,
+  invalid,
+  validateGenerate,
+  validateMaxUses,
+} from "../shared/bounds.js";
 import { vaultError } from "../shared/errors.js";
 import type { Storage, Lookup, Metadata } from "../shared/validators.js";
 export { isVaultError, VAULT_ERROR_CODES } from "../shared/errors.js";
@@ -116,13 +122,22 @@ type VerifyFor<C> = C extends { generate: object } | { lookup: "global" }
 function requireKind(options: VaultOptions, name: string): KindOptions {
   const policy = options.kinds[name];
   if (!policy) throw vaultError("VAULT_INVALID_ARGUMENT");
-  if (
-    typeof policy.hint !== "boolean" ||
-    typeof policy.auditReveals !== "boolean" ||
-    (!policy.generate && policy.lookup === undefined)
-  )
-    throw vaultError("VAULT_INVALID_ARGUMENT");
-  if (policy.generate) validateGenerate(policy.generate.prefix ?? "", policy.generate.bytes);
+  invalid(
+    !["encrypted", "hashed", "both"].includes(policy.storage) ||
+      typeof policy.hint !== "boolean" ||
+      typeof policy.auditReveals !== "boolean",
+  );
+  if (policy.generate !== undefined) {
+    invalid(
+      typeof policy.generate !== "object" ||
+        policy.generate === null ||
+        policy.lookup !== undefined ||
+        (policy.generate.prefix !== undefined && typeof policy.generate.prefix !== "string"),
+    );
+    validateGenerate(policy.generate.prefix ?? "", policy.generate.bytes);
+  } else invalid(policy.lookup !== "owner" && policy.lookup !== "global");
+  expiry({ ttlMs: policy.ttlMs }, 0);
+  validateMaxUses(policy.maxUses);
   return policy;
 }
 function validateReference(options: VaultOptions, ref: VaultReference) {
@@ -142,7 +157,10 @@ export class Vault<const K extends Record<string, KindOptions> = Record<string, 
   ) {
     this.options = options ?? { kinds: {} };
     const kinds = Object.entries(this.options.kinds);
-    for (const [kind] of kinds) boundedString(kind, 128);
+    for (const [kind] of kinds) {
+      boundedString(kind, 128);
+      requireKind(this.options, kind);
+    }
     if (kinds.filter(([, policy]) => policy.auditReveals).length > 100)
       throw vaultError("VAULT_INVALID_ARGUMENT");
   }

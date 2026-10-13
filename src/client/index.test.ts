@@ -395,3 +395,65 @@ it("accepts 100 audited kinds, unlimited unaudited kinds and 128-character kind 
   );
   expect(revealed.value).toBe("secret");
 });
+
+it.each([
+  ["generation below 16 bytes", { ...kinds.dual, generate: { bytes: 1 } }],
+  ["generation above 64 bytes", { ...kinds.dual, generate: { bytes: 65 } }],
+  ["fractional generation bytes", { ...kinds.dual, generate: { bytes: 16.5 } }],
+  ["invalid generation prefix", { ...kinds.dual, generate: { bytes: 16, prefix: "!" } }],
+  ["non-string generation prefix", { ...kinds.dual, generate: { bytes: 16, prefix: 1 } }],
+  ["null generation settings", { ...kinds.dual, generate: null }],
+  ["generated kind with explicit lookup", { ...kinds.dual, lookup: "owner" }],
+  ["missing supplied lookup", { storage: "hashed", hint: false, auditReveals: false }],
+  ["invalid supplied lookup", { ...kinds.provider, lookup: "invalid" }],
+  ["invalid storage", { ...kinds.provider, storage: "invalid" }],
+  ["missing hint policy", { storage: "hashed", lookup: "owner", auditReveals: false }],
+  ["invalid audit policy", { ...kinds.provider, auditReveals: 1 }],
+  ["zero default TTL", { ...kinds.provider, ttlMs: 0 }],
+  ["fractional default TTL", { ...kinds.provider, ttlMs: 1.5 }],
+  ["unsafe default TTL", { ...kinds.provider, ttlMs: Number.MAX_SAFE_INTEGER + 1 }],
+  ["zero default use limit", { ...kinds.provider, maxUses: 0 }],
+  ["fractional default use limit", { ...kinds.provider, maxUses: 1.5 }],
+  ["unsafe default use limit", { ...kinds.provider, maxUses: Number.MAX_SAFE_INTEGER + 1 }],
+])("rejects %s before a consumer calls create", async (_, policy) => {
+  await expectVaultError(
+    Promise.resolve().then(
+      () => new Vault(components.vault, { kinds: { invalid: policy as KindOptions } }),
+    ),
+    "VAULT_INVALID_ARGUMENT",
+  );
+});
+
+it.each([undefined, "provider"] as const)(
+  "credentials.list rejects cursors exceeding the selected key with kind %s",
+  async (kind) => {
+    const t = setup();
+    const cursor = JSON.stringify(Array(kind === undefined ? 5 : 6).fill(null));
+    for (const paginationOpts of [
+      { numItems: 1, cursor },
+      { numItems: 1, cursor: null, endCursor: cursor },
+    ]) {
+      await expectVaultError(
+        t.run((ctx) => vault.credentials.list(ctx, { owner: "tenant", kind, paginationOpts })),
+        "VAULT_INVALID_ARGUMENT",
+      );
+    }
+  },
+);
+
+it.each([{ owner: "tenant" }, { credentialId: "credential" }])(
+  "events.list rejects cursors exceeding the selected key for %j",
+  async (ref) => {
+    const t = setup();
+    const cursor = JSON.stringify(Array(5).fill(null));
+    for (const paginationOpts of [
+      { numItems: 1, cursor },
+      { numItems: 1, cursor: null, endCursor: cursor },
+    ]) {
+      await expectVaultError(
+        t.run((ctx) => vault.events.list(ctx, { ref, paginationOpts })),
+        "VAULT_INVALID_ARGUMENT",
+      );
+    }
+  },
+);

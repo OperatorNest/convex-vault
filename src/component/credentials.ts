@@ -335,7 +335,7 @@ export const list = query({
     keyring();
     boundedString(args.owner, 256);
     if (args.kind !== undefined) boundedString(args.kind, 128);
-    const pageRequest = boundedPage(args.paginationOpts);
+    const pageRequest = boundedPage(args.paginationOpts, args.kind === undefined ? 4 : 5);
     const credentials = paginator(ctx.db, schema).query("credentials");
     const { kind } = args;
     const page = await (

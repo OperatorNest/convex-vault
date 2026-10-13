@@ -7,3 +7,5 @@ Credentials record `valuesDeletedAt` when cleanup or revoke deletes their values
 A cleanup run reads no credential whose work is finished, so its cost depends on the rows that still need work, not on the rows retained for renewal or audit. Revoke, cleanup and replace each write one extra field. Each credential carries two more indexes, which adds write cost to every credential insert and patch.
 
 Cleanup only deletes, so it reads no key and runs when `VAULT_KEYS` is missing or malformed. Value deletion removes the lookup hashes with the ciphertext; no tombstone keeps them. `verify` therefore returns `expired` or `exhausted` until cleanup deletes the values, then `not_found`, and the deleted value no longer counts as a duplicate.
+
+Both `cursor` and `endCursor` are JSON arrays with at most the selected index's declared fields plus `_creationTime` and `_id`: four values for owner credential lists and event lists, five for kind-filtered credential lists. Shorter arrays are valid prefix bounds. Longer arrays fail with `VAULT_INVALID_ARGUMENT` before pagination constructs an index bound.

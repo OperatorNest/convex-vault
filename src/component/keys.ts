@@ -79,7 +79,7 @@ async function rotateBatch(
   // Group both versions of each credential: one event and at most 100 values per batch.
   const page = await paginator(ctx.db, schema)
     .query("credentials")
-    .paginate(boundedPage({ numItems: 50, cursor }));
+    .paginate(boundedPage({ numItems: 50, cursor }, 2));
   for (const credential of page.page) {
     const rows = await ctx.db
       .query("values")

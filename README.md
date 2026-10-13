@@ -83,6 +83,8 @@ const vault = new Vault(components.vault, {
 | `hashed`    | Owner-chosen shared tokens: `verify`              | API keys, invites, magic-link and reset tokens: `verify` |
 | `both`      | Imported keys: `reveal` and `verify`              | Dashboard keys: `reveal` and `verify`                    |
 
+The constructor requires valid generation settings, explicit boolean `hint` and `auditReveals`, and positive safe-integer `ttlMs` and `maxUses` defaults when supplied. Generated kinds omit `lookup`; supplied kinds choose `owner` or `global`.
+
 A kind with `generate` creates its own values and always uses global lookup. A kind without `generate` stores values your app supplies and requires explicit lookup; use `lookup: "global"` for imported bearer tokens, which then need at least 32 characters. The component records a kind's storage, origin and lookup on its first create and rejects any later change with `VAULT_KIND_CONFLICT`; a new policy needs a new kind name.
 
 ### Authorize in the app
@@ -128,7 +130,7 @@ A named reference `{ owner, kind, name }` resolves only within the given owner, 
 | `credentialId`                                                                       | The credential's Convex row ID, returned on create and used in references and events.                                                                                                                                         |
 | `owner`                                                                              | An opaque user, team or organization identifier supplied and authorized by the app.                                                                                                                                           |
 | `actor`                                                                              | An optional app-authorized identifier of who performed an operation, recorded only on audit events.                                                                                                                           |
-| Kind                                                                                 | An app-defined credential category whose storage, origin and lookup policy is recorded on first creation.                                                                                                                     |
+| Kind                                                                                 | An app-defined credential category validated at client construction; its storage, origin and lookup policy is recorded on first creation.                                                                                     |
 | `storage`; `encrypted`, `hashed`, `both`                                             | Ciphertext supports reveal; a keyed hash supports verify; both stores ciphertext and a keyed hash.                                                                                                                            |
 | `origin`; `generated`, `supplied`                                                    | Generated values are produced inside a mutation and returned on create or replace; supplied values come from the app and are never returned on create or replace.                                                             |
 | `lookup`; `owner`, `global`                                                          | Owner lookup hashes the owner with the value; global lookup resolves ownership from the value and requires at least 32 characters for supplied values.                                                                        |
@@ -289,7 +291,7 @@ Each encrypted write uses a fresh AES-256-GCM data key and fresh IVs. HKDF-SHA25
 
 ## API reference
 
-`new Vault(components.vault, { kinds })` configures credential kinds; omitting options leaves no credential kinds available. Every method takes `(ctx, args)`, or only `ctx` where Arguments is none. Groups call the same-named component modules.
+`new Vault(components.vault, { kinds })` validates every kind's storage, lookup, generation, hint, audit policy and lifecycle defaults before any operation; invalid configuration throws `VAULT_INVALID_ARGUMENT`. It configures credential kinds; omitting options leaves no credential kinds available. Every method takes `(ctx, args)`, or only `ctx` where Arguments is none. Groups call the same-named component modules.
 
 | Method                | Context           | Arguments                                                                                          | Result                                                                                            |
 | --------------------- | ----------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -299,14 +301,14 @@ Each encrypted write uses a fresh AES-256-GCM data key and fresh IVs. HKDF-SHA25
 | `credentials.replace` | `MutationContext` | `{ ref, value?, graceMs?, ttlMs?, expiresAt?, actor? }`                                            | `{ value?, hint? }`                                                                               |
 | `credentials.revoke`  | `MutationContext` | `{ ref, actor? }`                                                                                  | `null`                                                                                            |
 | `credentials.get`     | `QueryContext`    | `{ ref }`                                                                                          | Stored credential metadata and current hint                                                       |
-| `credentials.list`    | `QueryContext`    | `{ owner, kind?, paginationOpts }`                                                                 | Page of stored credential metadata                                                                |
-| `events.list`         | `QueryContext`    | `{ ref: { credentialId } \| { owner }, paginationOpts }`                                           | Page of stored audit events                                                                       |
+| `credentials.list`    | `QueryContext`    | `{ owner, kind?, paginationOpts }`                                                                 | Page of stored credential metadata; cursor key length 4, or 5 with `kind`                         |
+| `events.list`         | `QueryContext`    | `{ ref: { credentialId } \| { owner }, paginationOpts }`                                           | Page of stored audit events; cursor key length 4                                                  |
 | `keys.getStatus`      | `QueryContext`    | none                                                                                               | Configured versions, value references and missing versions                                        |
 | `keys.rotate`         | `MutationContext` | none                                                                                               | `null`; schedules batched rotation                                                                |
 
 `ref` is `{ credentialId, kind? }` or `{ owner, kind, name }`. TypeScript infers kind names from the `kinds` option and rejects `reveal` on `hashed` kinds and `verify` on `encrypted` kinds; the component enforces both at runtime. A credential ID reference with `kind` resolves only a credential of that kind and otherwise fails with `VAULT_NOT_FOUND`; it never checks the owner. When `verify` receives `owner`, a matching value of another owner returns `not_found`, for global kinds too. Failed verification returns one reason: `not_found`, `expired`, `exhausted` or `missing_scope`. A revoked credential returns `not_found` because revoke deletes its values; an expired or exhausted credential returns `expired` or `exhausted` until cleanup deletes its values, then `not_found`.
 
-Pagination takes `{ numItems, cursor }` with `numItems` from 1 to 100 and `cursor` `null` for the first page. It returns `page`, `isDone` and `continueCursor`; pass `continueCursor` as the next `cursor` until `isDone` is true. A request that also passes `endCursor` returns the rows up to that cursor, scans at most `numItems + 1` rows and 1 MiB and can return all of them; when the range holds more, it returns `pageStatus: "SplitRequired"` and `isDone: false`. A cursor that is longer than 4096 characters, not well-formed, or not a JSON array of at most 16 primitive values fails with `VAULT_INVALID_ARGUMENT`. The client forwards only `numItems`, `cursor` and `endCursor`. Besides the page scan, `credentials.list` reads one value row per returned credential that stores a hint.
+Pagination takes `{ numItems, cursor }` with `numItems` from 1 to 100 and `cursor` `null` for the first page. It returns `page`, `isDone` and `continueCursor`; pass `continueCursor` as the next `cursor` until `isDone` is true. A request that also passes `endCursor` returns the rows up to that cursor, scans at most `numItems + 1` rows and 1 MiB and can return all of them; when the range holds more, it returns `pageStatus: "SplitRequired"` and `isDone: false`. A cursor that is longer than 4096 characters, not well-formed, or not a JSON array of at most the selected index's key length in primitive values fails with `VAULT_INVALID_ARGUMENT`. The key length is 4 for unfiltered `credentials.list` and both `events.list` references, and 5 for `credentials.list` with `kind`, including `_creationTime` and `_id`. Shorter cursor arrays remain valid prefix bounds. Both `cursor` and `endCursor` obey this limit. The client forwards only `numItems`, `cursor` and `endCursor`. Besides the page scan, `credentials.list` reads one value row per returned credential that stores a hint.
 
 `credentials.list` returns credentials newest first by `createdAt`; without `kind` it orders across every kind of the owner.
 
@@ -314,12 +316,14 @@ The package also exports option and result types, argument and result validators
 
 ## Errors
 
+Vault has no provider operations or provider-originated error codes, so vault errors never include `retryable`.
+
 Every vault error is a `ConvexError<{ code, message }>` with a fixed message. `isVaultError` checks both the code and its exact message.
 
 | Code                     | Message                                                                                              | When                                                                                                 |
 | ------------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `VAULT_NOT_CONFIGURED`   | VAULT_KEYS is missing or malformed, lacks a required key version, or changed during key rotation.    | Component env is absent or malformed, a referenced key is absent, or rotation configuration changed. |
-| `VAULT_INVALID_ARGUMENT` | An argument is missing, malformed or out of bounds.                                                  | An input, cursor or page size fails validation.                                                      |
+| `VAULT_INVALID_ARGUMENT` | An argument is missing, malformed or out of bounds.                                                  | An input, cursor, page size or configured kind policy fails validation.                              |
 | `VAULT_NOT_FOUND`        | The credential, name or required current value does not exist.                                       | A credential reference or required current value cannot be resolved.                                 |
 | `VAULT_NOT_REVEALABLE`   | The credential's kind stores only a hash, so its value cannot be revealed.                           | Reveal targets a hashed kind.                                                                        |
 | `VAULT_NOT_VERIFIABLE`   | The kind stores only ciphertext, so its values cannot be verified.                                   | Verify targets an encrypted kind.                                                                    |
@@ -343,21 +347,21 @@ Use keys from `generateMasterKey()`, fake timers for expiry and grace, and `awai
 
 ## Limits and retention
 
-| Input                   | Limit                                                                    |
-| ----------------------- | ------------------------------------------------------------------------ |
-| Owner                   | 1 to 256 characters                                                      |
-| Kind and name           | 1 to 128 characters each                                                 |
-| Label                   | 1 to 256 characters                                                      |
-| Actor                   | 1 to 256 characters                                                      |
-| Credential ID reference | 1 to 128 characters                                                      |
-| Supplied value          | 1 byte to 16 KiB of UTF-8; global lookup also requires 32 characters     |
-| Scopes                  | 32 scopes of 1 to 64 characters each                                     |
-| Metadata                | 32 keys and 4 KiB as JSON; values are strings, numbers, booleans or null |
-| Generated randomness    | 16 to 64 bytes; explicit in kind configuration                           |
-| Generated prefix        | 0 to 32 characters from `A-Za-z0-9_-`                                    |
-| Page size               | 1 to 100                                                                 |
-| Cursor                  | 4096 characters; a JSON array of at most 16 primitive values             |
-| Audited kinds           | 100 kinds with `auditReveals: true` per client; 128 characters each      |
+| Input                   | Limit                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------- |
+| Owner                   | 1 to 256 characters                                                                          |
+| Kind and name           | 1 to 128 characters each                                                                     |
+| Label                   | 1 to 256 characters                                                                          |
+| Actor                   | 1 to 256 characters                                                                          |
+| Credential ID reference | 1 to 128 characters                                                                          |
+| Supplied value          | 1 byte to 16 KiB of UTF-8; global lookup also requires 32 characters                         |
+| Scopes                  | 32 scopes of 1 to 64 characters each                                                         |
+| Metadata                | 32 keys and 4 KiB as JSON; values are strings, numbers, booleans or null                     |
+| Generated randomness    | 16 to 64 bytes; explicit in kind configuration                                               |
+| Generated prefix        | 0 to 32 characters from `A-Za-z0-9_-`                                                        |
+| Page size               | 1 to 100                                                                                     |
+| Cursor                  | 4096 characters; a JSON array of at most the selected index's key length in primitive values |
+| Audited kinds           | 100 kinds with `auditReveals: true` per client; 128 characters each                          |
 
 Character limits count UTF-16 code units (JavaScript `string.length`) and reject strings with unpaired surrogates; hint thresholds count Unicode code points.
 

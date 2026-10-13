@@ -15,7 +15,7 @@ export const list = query({
   returns: paginationResultValidator(eventValidator),
   handler: async (ctx, args) => {
     keyring();
-    const pageRequest = boundedPage(args.paginationOpts);
+    const pageRequest = boundedPage(args.paginationOpts, 4);
     const ref = args.ref;
     if ("credentialId" in ref) boundedString(ref.credentialId, 128);
     else boundedString(ref.owner, 256);

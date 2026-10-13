@@ -50,7 +50,7 @@ export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[number];
 export type VaultErrorData = {
   code: VaultErrorCode;
   message: string;
-  /** `true` only when repeating the identical call cannot create a second provider effect: the call is a read, the call carries an idempotency key the component or provider deduplicates, or the provider definitively refused without effect. */
+  /** `true` only when the failure may be transient (a network failure, a timeout, or provider status 408, 429 or 5xx) and repeating the identical call cannot create a second provider effect (the call is a read, carries an idempotency key the component or provider deduplicates, or failed with a 429 or before the request was sent). */
   retryable?: boolean;
   providerStatus?: number;
   providerCode?: string;

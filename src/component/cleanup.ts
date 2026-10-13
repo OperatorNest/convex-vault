@@ -93,14 +93,17 @@ async function batch(
     const page = await paginator(ctx.db, schema)
       .query("values")
       .withIndex("by_validUntilAt", (q) => q.gt("validUntilAt", undefined).lte("validUntilAt", now))
-      .paginate(boundedPage({ numItems: 100, cursor }));
+      .paginate(boundedPage({ numItems: 100, cursor }, 3));
     for (const row of page.page) await ctx.db.delete("values", row._id);
     ({ isDone, continueCursor } = page);
   } else {
     const page = await credentialPage(
       ctx,
       phase,
-      boundedPage({ numItems: CREDENTIALS_PER_PAGE, cursor }),
+      boundedPage(
+        { numItems: CREDENTIALS_PER_PAGE, cursor },
+        phase === "exhaustedValues" || phase === "expiredValues" ? 5 : 4,
+      ),
       now,
     );
     for (const credential of page.page) await cleanCredential(ctx, phase, credential, now);
