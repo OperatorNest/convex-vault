@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./_generated/api.js";
-import { configureKeys, expectVaultError, setupTest, required } from "../test-helpers.js";
+import { api, internal } from "./_generated/api.js";
+import { configureKeys, drain, expectVaultError, setupTest, required } from "../test-helpers.js";
 import { generateMasterKey } from "../shared/keyring.js";
+import { isVaultError } from "../shared/errors.js";
 import type { PaginationResult, FunctionArgs } from "convex/server";
 import type { Credential, Storage } from "../shared/validators.js";
 
@@ -52,14 +53,21 @@ describe("credential lifecycle", () => {
           metadata: { tier: 1, enabled: true, note: null },
         }),
       );
-      const first = generated ? required(created.value) : "first supplied test credential";
+      const first = generated
+        ? required(created.value, "generated value")
+        : "first supplied test credential";
       expect(created.value !== undefined).toBe(generated);
       expect(created.hint !== undefined).toBe(generated);
       const ref = { credentialId: created.credentialId };
       if (storage !== "hashed")
-        expect(await t.mutation(api.credentials.reveal, { ref })).toEqual({ value: first });
+        expect(await t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref })).toEqual({
+          value: first,
+        });
       else
-        await expectVaultError(t.mutation(api.credentials.reveal, { ref }), "VAULT_NOT_REVEALABLE");
+        await expectVaultError(
+          t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref }),
+          "VAULT_NOT_REVEALABLE",
+        );
       if (storage !== "encrypted")
         expect(
           await t.mutation(api.credentials.verify, {
@@ -85,10 +93,18 @@ describe("credential lifecycle", () => {
         value: generated ? undefined : "second supplied test credential",
         graceMs: 1000,
       });
-      const second = generated ? required(replaced.value) : "second supplied test credential";
+      const second = generated
+        ? required(replaced.value, "replacement value")
+        : "second supplied test credential";
       expect(second).not.toBe(first);
       if (storage !== "hashed")
-        expect(await t.mutation(api.credentials.reveal, { ref, includePrevious: true })).toEqual({
+        expect(
+          await t.mutation(api.credentials.reveal, {
+            auditRevealsKinds: [],
+            ref,
+            includePrevious: true,
+          }),
+        ).toEqual({
           value: second,
           previous: { value: first, validUntilAt: START + 1000 },
         });
@@ -102,7 +118,13 @@ describe("credential lifecycle", () => {
         ).toMatchObject({ ok: true });
       vi.setSystemTime(START + 1000);
       if (storage !== "hashed")
-        expect(await t.mutation(api.credentials.reveal, { ref, includePrevious: true })).toEqual({
+        expect(
+          await t.mutation(api.credentials.reveal, {
+            auditRevealsKinds: [],
+            ref,
+            includePrevious: true,
+          }),
+        ).toEqual({
           value: second,
         });
       if (storage !== "encrypted")
@@ -129,7 +151,10 @@ describe("credential lifecycle", () => {
         t.mutation(api.credentials.replace, { ref, value: "next" }),
         "VAULT_INACTIVE",
       );
-      await expectVaultError(t.mutation(api.credentials.reveal, { ref }), "VAULT_INACTIVE");
+      await expectVaultError(
+        t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref }),
+        "VAULT_INACTIVE",
+      );
       const events = await t.query(api.events.list, {
         ref,
         paginationOpts: { numItems: 100, cursor: null },
@@ -195,6 +220,7 @@ describe("credential lifecycle", () => {
     expect(await verify(old)).toEqual({ ok: false, reason: "not_found" });
     expect(
       await t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: [],
         ref: { credentialId: a.credentialId },
         includePrevious: true,
       }),
@@ -211,6 +237,7 @@ describe("credential lifecycle", () => {
     });
     expect(
       await t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: [],
         ref: { credentialId: b.credentialId },
         includePrevious: true,
       }),
@@ -230,7 +257,10 @@ describe("credential lifecycle", () => {
       input({ storage: "encrypted", kind: "credential" }),
     );
     await expectVaultError(
-      t.mutation(api.credentials.reveal, { ref: { credentialId: a.credentialId, kind: "other" } }),
+      t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: [],
+        ref: { credentialId: a.credentialId, kind: "other" },
+      }),
       "VAULT_NOT_FOUND",
     );
     await expectVaultError(
@@ -239,6 +269,7 @@ describe("credential lifecycle", () => {
     );
     expect(
       await t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: [],
         ref: { credentialId: a.credentialId, kind: "credential" },
       }),
     ).toEqual({ value: input().value });
@@ -336,7 +367,8 @@ describe("credential lifecycle", () => {
         input({ name: "primary", maxUses: 1 }),
       );
       const ref = { credentialId: created.credentialId };
-      if (operation === "reveal") await t.mutation(api.credentials.reveal, { ref });
+      if (operation === "reveal")
+        await t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref });
       else
         await t.mutation(api.credentials.verify, {
           kind: "shared",
@@ -359,6 +391,111 @@ describe("credential lifecycle", () => {
       expect(events.page.filter((event) => event.type === "exhausted")).toHaveLength(1);
     },
   );
+  it("audits a reveal when the stored flag or the caller's audited kinds cover the credential's kind", async () => {
+    const t = setupTest();
+    const created = await t.mutation(
+      api.credentials.create,
+      input({ storage: "encrypted", auditReveals: false }),
+    );
+    const ref = { credentialId: created.credentialId };
+    const revealed = async () =>
+      (
+        await t.query(api.events.list, { ref, paginationOpts: { numItems: 100, cursor: null } })
+      ).page.filter((event) => event.type === "revealed");
+    await t.mutation(api.credentials.reveal, { auditRevealsKinds: ["other"], ref });
+    expect(await revealed()).toHaveLength(0);
+    await t.mutation(api.credentials.reveal, {
+      auditRevealsKinds: ["shared"],
+      ref,
+      actor: "operator",
+    });
+    expect(await revealed()).toMatchObject([{ actor: "operator" }]);
+    const audited = await t.mutation(
+      api.credentials.create,
+      input({ kind: "audited", storage: "encrypted", auditReveals: true }),
+    );
+    await t.mutation(api.credentials.reveal, {
+      auditRevealsKinds: [],
+      ref: { credentialId: audited.credentialId },
+    });
+    const events = await t.query(api.events.list, {
+      ref: { credentialId: audited.credentialId },
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+    expect(events.page.filter((event) => event.type === "revealed")).toHaveLength(1);
+    await expectVaultError(
+      t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: Array.from({ length: 101 }, (_, index) => `kind${index}`),
+        ref,
+      }),
+      "VAULT_INVALID_ARGUMENT",
+    );
+    await expectVaultError(
+      t.mutation(api.credentials.reveal, { auditRevealsKinds: ["x".repeat(129)], ref }),
+      "VAULT_INVALID_ARGUMENT",
+    );
+  });
+  it("rejects an oversized actor on a non-audited reveal, replace and revoke without writing", async () => {
+    const t = setupTest();
+    const created = await t.mutation(
+      api.credentials.create,
+      input({ storage: "encrypted", auditReveals: false, maxUses: 5 }),
+    );
+    const ref = { credentialId: created.credentialId };
+    const actor = "x".repeat(257);
+    const before = await t.query(api.credentials.get, { ref });
+    await expectVaultError(
+      t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref, actor }),
+      "VAULT_INVALID_ARGUMENT",
+    );
+    await expectVaultError(
+      t.mutation(api.credentials.replace, { ref, value: "replacement", actor }),
+      "VAULT_INVALID_ARGUMENT",
+    );
+    await expectVaultError(
+      t.mutation(api.credentials.revoke, { ref, actor }),
+      "VAULT_INVALID_ARGUMENT",
+    );
+    expect(await t.query(api.credentials.get, { ref })).toEqual(before);
+  });
+  it("throws a non-vault error when a credential has more than two values", async () => {
+    const t = setupTest();
+    const created = await t.mutation(api.credentials.create, input({ storage: "encrypted" }));
+    await t.run(async (ctx) => {
+      const credentialId = required(
+        ctx.db.normalizeId("credentials", created.credentialId),
+        "credential ID",
+      );
+      for (const valueId of ["extra-1", "extra-2"])
+        await ctx.db.insert("values", {
+          valueId,
+          credentialId,
+          state: "previous",
+          createdAt: START,
+        });
+    });
+    const error: unknown = await t
+      .mutation(api.credentials.revoke, { ref: { credentialId: created.credentialId } })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(isVaultError(error)).toBe(false);
+  });
+  it("lists credentials newest first across kinds when kind is omitted", async () => {
+    const t = setupTest();
+    const ids = [];
+    for (const [index, kind] of ["first", "second", "first"].entries()) {
+      vi.setSystemTime(START + index);
+      ids.push(
+        (await t.mutation(api.credentials.create, input({ kind, value: `value ${index}` })))
+          .credentialId,
+      );
+    }
+    const page = await t.query(api.credentials.list, {
+      owner: "tenant",
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(page.page.map((credential) => credential.credentialId)).toEqual(ids.toReversed());
+  });
   it("rejects expiry exactly at the boundary and renews an expired credential only through replace with new expiry", async () => {
     const t = setupTest();
     const a = await t.mutation(api.credentials.create, input({ ttlMs: 1000 }));
@@ -371,7 +508,9 @@ describe("credential lifecycle", () => {
         owner: "tenant",
       }),
     ).toMatchObject({ ok: true });
-    expect(await t.mutation(api.credentials.reveal, { ref })).toHaveProperty("value");
+    expect(await t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref })).toHaveProperty(
+      "value",
+    );
     vi.setSystemTime(START + 1000);
     expect(
       await t.mutation(api.credentials.verify, {
@@ -380,18 +519,56 @@ describe("credential lifecycle", () => {
         owner: "tenant",
       }),
     ).toEqual({ ok: false, reason: "expired" });
-    await expectVaultError(t.mutation(api.credentials.reveal, { ref }), "VAULT_INACTIVE");
+    await expectVaultError(
+      t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref }),
+      "VAULT_INACTIVE",
+    );
     await expectVaultError(
       t.mutation(api.credentials.replace, { ref, value: "unrenewed" }),
       "VAULT_INACTIVE",
     );
     await t.mutation(api.credentials.replace, { ref, value: "renewed", ttlMs: 500 });
-    expect(await t.mutation(api.credentials.reveal, { ref })).toEqual({ value: "renewed" });
+    expect(await t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref })).toEqual({
+      value: "renewed",
+    });
     expect(await t.query(api.credentials.get, { ref })).toHaveProperty("expiresAt", START + 1500);
     await t.mutation(api.credentials.replace, { ref, value: "third" });
     expect(await t.query(api.credentials.get, { ref })).toHaveProperty("expiresAt", START + 1500);
     await t.mutation(api.credentials.replace, { ref, value: "fourth", expiresAt: START + 2000 });
     expect(await t.query(api.credentials.get, { ref })).toHaveProperty("expiresAt", START + 2000);
+  });
+  it("renews an expired active credential after cleanup has deleted its current value", async () => {
+    const t = setupTest();
+    const created = await t.mutation(api.credentials.create, {
+      bytes: undefined,
+      hint: true,
+      auditReveals: true,
+      owner: "tenant",
+      kind: "key",
+      storage: "both",
+      origin: "supplied",
+      lookup: "owner",
+      value: "old",
+      ttlMs: 1,
+    });
+    const ref = { credentialId: created.credentialId };
+    vi.setSystemTime(START + 1);
+    await t.mutation(internal.cleanup.run, {});
+    await drain(t);
+    expect(await t.run((ctx) => ctx.db.query("values").take(1))).toEqual([]);
+    await t.mutation(api.credentials.replace, { ref, value: "renewed", ttlMs: 1000, graceMs: 100 });
+    expect(
+      await t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: [],
+        ref,
+        includePrevious: true,
+      }),
+    ).toEqual({
+      value: "renewed",
+    });
+    expect(
+      await t.mutation(api.credentials.verify, { kind: "key", owner: "tenant", value: "renewed" }),
+    ).toMatchObject({ ok: true });
   });
   it("consumes one maxUses limit from verify and reveal and consumes no use on a missing scope", async () => {
     const t = setupTest();
@@ -412,7 +589,7 @@ describe("credential lifecycle", () => {
         owner: "tenant",
       }),
     ).toMatchObject({ ok: true, usesLeft: 1 });
-    await t.mutation(api.credentials.reveal, { ref });
+    await t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref });
     expect(await t.query(api.credentials.get, { ref })).toMatchObject({
       useCount: 2,
       status: "exhausted",
@@ -424,7 +601,10 @@ describe("credential lifecycle", () => {
         owner: "tenant",
       }),
     ).toEqual({ ok: false, reason: "exhausted" });
-    await expectVaultError(t.mutation(api.credentials.reveal, { ref }), "VAULT_INACTIVE");
+    await expectVaultError(
+      t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref }),
+      "VAULT_INACTIVE",
+    );
     await expectVaultError(
       t.mutation(api.credentials.replace, { ref, value: "new" }),
       "VAULT_INACTIVE",
@@ -442,7 +622,10 @@ describe("credential lifecycle", () => {
       const a = await t.mutation(api.credentials.create, input({ maxUses: 1 }));
       const call = () =>
         operation === "reveal"
-          ? t.mutation(api.credentials.reveal, { ref: { credentialId: a.credentialId } })
+          ? t.mutation(api.credentials.reveal, {
+              auditRevealsKinds: [],
+              ref: { credentialId: a.credentialId },
+            })
           : t.mutation(api.credentials.verify, {
               kind: "shared",
               value: input().value ?? "",
@@ -460,7 +643,7 @@ describe("credential lifecycle", () => {
     const a = await t.mutation(api.credentials.create, input({ auditReveals: false }));
     const ref = { credentialId: a.credentialId };
     const before = await t.query(api.credentials.get, { ref });
-    await t.mutation(api.credentials.reveal, { ref });
+    await t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref });
     expect(await t.query(api.credentials.get, { ref })).toEqual(before);
     expect(
       (
@@ -510,9 +693,18 @@ describe("credential lifecycle", () => {
     expect(b.hint).toBeUndefined();
     const c = await t.mutation(api.credentials.replace, { ref, graceMs: 2000 });
     expect(
-      await t.mutation(api.credentials.verify, { kind: "shared", value: required(a.value) }),
+      await t.mutation(api.credentials.verify, {
+        kind: "shared",
+        value: required(a.value, "generated value"),
+      }),
     ).toEqual({ ok: false, reason: "not_found" });
-    expect(await t.mutation(api.credentials.reveal, { ref, includePrevious: true })).toEqual({
+    expect(
+      await t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: [],
+        ref,
+        includePrevious: true,
+      }),
+    ).toEqual({
       value: c.value,
       previous: { value: b.value, validUntilAt: START + 2000 },
     });
@@ -542,7 +734,7 @@ describe("credential lifecycle", () => {
       cursor = page.isDone ? null : page.continueCursor;
     } while (cursor !== null);
     expect(new Set(ids).size).toBe(6);
-    const first = required(ids[0]);
+    const first = required(ids[0], "first credential ID");
     outputs.push(await t.query(api.credentials.get, { ref: { credentialId: first } }));
     const filtered = await t.query(api.credentials.list, {
       owner: "tenant",
@@ -559,7 +751,12 @@ describe("credential lifecycle", () => {
     );
     outputs.push(await t.query(api.keys.getStatus, {}));
     outputs.push(await t.mutation(api.keys.rotate, {}));
-    outputs.push(await t.mutation(api.credentials.reveal, { ref: { credentialId: first } }));
+    outputs.push(
+      await t.mutation(api.credentials.reveal, {
+        auditRevealsKinds: [],
+        ref: { credentialId: first },
+      }),
+    );
     outputs.push(
       await t.mutation(api.credentials.replace, { ref: { credentialId: first }, value: "new" }),
     );
@@ -583,25 +780,33 @@ describe("credential lifecycle", () => {
     });
     expect(events.page).toHaveLength(2);
   });
-  it.each(["not-json", "5", '{"key":1}', '[{"$integer":"x"}]', ""])(
-    "rejects the malformed page cursor %j with a structured error",
-    async (cursor) => {
-      const t = setupTest();
-      for (const paginationOpts of [
-        { numItems: 10, cursor },
-        { numItems: 10, cursor: null, endCursor: cursor },
-      ]) {
-        await expectVaultError(
-          t.query(api.credentials.list, { owner: "tenant", paginationOpts }),
-          "VAULT_INVALID_ARGUMENT",
-        );
-        await expectVaultError(
-          t.query(api.events.list, { ref: { owner: "tenant" }, paginationOpts }),
-          "VAULT_INVALID_ARGUMENT",
-        );
-      }
-    },
-  );
+  it.each([
+    "not-json",
+    "5",
+    '{"key":1}',
+    '[{"$integer":"x"}]',
+    "",
+    JSON.stringify(["x".repeat(4096)]),
+    JSON.stringify(Array.from({ length: 17 }, () => 1)),
+    '[{"key":1}]',
+    "[[1]]",
+    '["\\ud800"]',
+  ])("rejects the malformed page cursor %j with a structured error", async (cursor) => {
+    const t = setupTest();
+    for (const paginationOpts of [
+      { numItems: 10, cursor },
+      { numItems: 10, cursor: null, endCursor: cursor },
+    ]) {
+      await expectVaultError(
+        t.query(api.credentials.list, { owner: "tenant", paginationOpts }),
+        "VAULT_INVALID_ARGUMENT",
+      );
+      await expectVaultError(
+        t.query(api.events.list, { ref: { owner: "tenant" }, paginationOpts }),
+        "VAULT_INVALID_ARGUMENT",
+      );
+    }
+  });
   it.each([undefined, "bad", "1:AA"])(
     "fails every public operation closed for configuration %s",
     async (config) => {
@@ -611,7 +816,7 @@ describe("credential lifecycle", () => {
       const page = { numItems: 10, cursor: null };
       const calls = [
         t.mutation(api.credentials.create, input()),
-        t.mutation(api.credentials.reveal, { ref }),
+        t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref }),
         t.mutation(api.credentials.verify, { kind: "shared", value: "test" }),
         t.mutation(api.credentials.replace, { ref }),
         t.mutation(api.credentials.revoke, { ref }),

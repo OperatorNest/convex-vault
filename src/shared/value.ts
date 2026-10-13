@@ -1,19 +1,14 @@
 import { base64urlEncode, utf8 } from "./base64url.js";
-import { deriveKeyBytes } from "./keyring.js";
+import { derivedKey, type Keyring } from "./keyring.js";
 
 export async function lookupHash(
-  master: Uint8Array,
+  ring: Keyring,
+  version: number,
   kind: string,
   lookupOwner: string,
   value: string,
 ): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    await deriveKeyBytes(master, "hash"),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+  const key = await derivedKey(ring, version, "hash");
   return base64urlEncode(
     new Uint8Array(
       await crypto.subtle.sign(

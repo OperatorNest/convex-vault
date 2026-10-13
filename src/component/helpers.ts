@@ -1,7 +1,8 @@
 import type { Doc } from "./_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { env } from "./_generated/server.js";
-import { readConfig, masterKey, type Keyring } from "../shared/keyring.js";
+import { readConfig } from "../shared/config.js";
+import type { Keyring } from "../shared/keyring.js";
 import { vaultError } from "../shared/errors.js";
 import { boundedString, validateValue } from "../shared/bounds.js";
 import { encryptEnvelope, type Envelope, type Identity } from "../shared/envelope.js";
@@ -48,15 +49,34 @@ export async function projection(
   ctx: QueryCtx,
   credential: Doc<"credentials">,
 ): Promise<Credential> {
-  const { _id, _creationTime, hint: enabled, ...fields } = credential;
   const row = await ctx.db
     .query("values")
-    .withIndex("by_credentialId_and_state", (q) => q.eq("credentialId", _id).eq("state", "current"))
+    .withIndex("by_credentialId_and_state", (q) =>
+      q.eq("credentialId", credential._id).eq("state", "current"),
+    )
     .unique();
   return {
-    credentialId: _id,
-    ...fields,
-    ...(enabled && row?.hint !== undefined ? { hint: row.hint } : {}),
+    credentialId: credential._id,
+    owner: credential.owner,
+    kind: credential.kind,
+    name: credential.name,
+    label: credential.label,
+    storage: credential.storage,
+    origin: credential.origin,
+    lookup: credential.lookup,
+    prefix: credential.prefix,
+    bytes: credential.bytes,
+    status: credential.status,
+    scopes: credential.scopes,
+    metadata: credential.metadata,
+    expiresAt: credential.expiresAt,
+    maxUses: credential.maxUses,
+    useCount: credential.useCount,
+    lastUsedAt: credential.lastUsedAt,
+    auditReveals: credential.auditReveals,
+    createdAt: credential.createdAt,
+    updatedAt: credential.updatedAt,
+    hint: credential.hint ? row?.hint : undefined,
   };
 }
 export function identity(credential: Doc<"credentials">, row: Doc<"values">): Identity {
@@ -92,7 +112,6 @@ export async function event(
   type: Doc<"events">["type"],
   actor?: string,
 ): Promise<void> {
-  if (actor !== undefined) boundedString(actor, 256);
   await ctx.db.insert("events", {
     credentialId: credential._id,
     owner: credential.owner,
@@ -135,7 +154,8 @@ export async function deleteValues(
     .query("values")
     .withIndex("by_credentialId_and_state", (q) => q.eq("credentialId", credential._id))
     .take(3);
-  if (rows.length > 2) throw vaultError("VAULT_INVALID_ARGUMENT");
+  if (rows.length > 2)
+    throw new Error("Corrupted vault state: credential has more than two values");
   for (const row of rows) await ctx.db.delete("values", row._id);
   return rows.length;
 }
@@ -158,8 +178,8 @@ export async function writeValue(
   let hashes: { lookupHash: string; hashVersion: number } | undefined;
   if (credential.storage !== "encrypted") {
     const lookupOwner = credential.lookup === "owner" ? credential.owner : "";
-    for (const [version, key] of ring.keys) {
-      const hash = await lookupHash(key, credential.kind, lookupOwner, value);
+    for (const version of ring.keys.keys()) {
+      const hash = await lookupHash(ring, version, credential.kind, lookupOwner, value);
       const duplicate = await ctx.db
         .query("values")
         .withIndex("by_lookupHash", (q) => q.eq("lookupHash", hash))
@@ -199,7 +219,7 @@ export async function findByValue(
   value: string,
 ): Promise<Doc<"values"> | null> {
   for (const version of ring.keys.keys()) {
-    const hash = await lookupHash(masterKey(ring, version), kind, owner, value);
+    const hash = await lookupHash(ring, version, kind, owner, value);
     const row = await ctx.db
       .query("values")
       .withIndex("by_lookupHash", (q) => q.eq("lookupHash", hash))

@@ -20,8 +20,14 @@ export default defineSchema({
   credentials: defineTable(credentialValidator)
     .index("by_owner_and_kind_and_name", ["owner", "kind", "name"])
     .index("by_owner_and_kind_and_createdAt", ["owner", "kind", "createdAt"])
+    .index("by_owner_and_createdAt", ["owner", "createdAt"])
     .index("by_status_and_updatedAt", ["status", "updatedAt"])
-    .index("by_expiresAt", ["expiresAt"]),
+    .index("by_status_and_expiresAt", ["status", "expiresAt"])
+    .index("by_status_and_valuesDeletedAt_and_expiresAt", [
+      "status",
+      "valuesDeletedAt",
+      "expiresAt",
+    ]),
   values: defineTable({
     valueId: v.string(),
     credentialId: v.id("credentials"),

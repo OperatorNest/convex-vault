@@ -32,10 +32,6 @@ pnpm smoke     # acceptance journey on a disposable local Convex backend
 Run `pnpm smoke` for any change to component functions, schema or shared runtime code:
 `convex-test` accepts calls the Convex runtime rejects, such as native `.paginate()` inside a component.
 
-## Encryption
-
-Envelope encryption binds owner, kind, credential row ID, value ID and wrapped-key version in AAD. Read master keys only through generated component env; never put them in arguments, rows, logs or errors. Tests use generated master keys or fixed vectors marked as test-only.
-
 ## Change requirements
 
 - Commit messages and PR titles follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
@@ -52,6 +48,10 @@ Envelope encryption binds owner, kind, credential row ID, value ID and wrapped-k
 - Regenerate committed bindings from their inputs with `pnpm build:codegen`.
 - Update affected examples, README claims and ADR contracts. Run the checks in AGENTS.md and
   report commands and exit codes.
+
+## Encryption
+
+Envelope encryption binds owner, kind, credential row ID, value ID and wrapped-key version in AAD. Read master keys only through generated component env; never put them in arguments, rows, logs or errors. Tests use generated master keys or fixed vectors marked as test-only.
 
 ## Bug reports
 

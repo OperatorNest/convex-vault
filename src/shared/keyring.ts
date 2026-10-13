@@ -1,29 +1,12 @@
-import { base64urlDecode, base64urlEncode, utf8 } from "./base64url.js";
+import { base64urlEncode, utf8 } from "./base64url.js";
 import { vaultError } from "./errors.js";
 
-export type Keyring = { active: number; keys: Map<number, Uint8Array<ArrayBuffer>> };
-export function readConfig(env: { VAULT_KEYS?: string }): Keyring {
-  const config = env.VAULT_KEYS;
-  try {
-    if (!config) throw vaultError("VAULT_NOT_CONFIGURED");
-    const keys = new Map<number, Uint8Array<ArrayBuffer>>();
-    for (const part of config.split(",")) {
-      const match = /^([1-9][0-9]*):([A-Za-z0-9_-]+)$/.exec(part);
-      if (!match) throw vaultError("VAULT_NOT_CONFIGURED");
-      const version = Number(match[1]);
-      const encoded = match[2];
-      if (!Number.isSafeInteger(version) || keys.has(version) || encoded === undefined) {
-        throw vaultError("VAULT_NOT_CONFIGURED");
-      }
-      const key = base64urlDecode(encoded);
-      if (key.length !== 32) throw vaultError("VAULT_NOT_CONFIGURED");
-      keys.set(version, key);
-    }
-    return { active: Math.max(...keys.keys()), keys };
-  } catch {
-    throw vaultError("VAULT_NOT_CONFIGURED");
-  }
-}
+// readConfig builds a new Keyring per function call, so derivedKeys caches for one call only.
+export type Keyring = {
+  active: number;
+  keys: Map<number, Uint8Array<ArrayBuffer>>;
+  derivedKeys: Map<string, Promise<CryptoKey>>;
+};
 export function masterKey(ring: Keyring, version: number): Uint8Array<ArrayBuffer> {
   const key = ring.keys.get(version);
   if (!key) throw vaultError("VAULT_NOT_CONFIGURED");
@@ -46,6 +29,24 @@ export async function deriveKeyBytes(
       256,
     ),
   );
+}
+export function derivedKey(
+  ring: Keyring,
+  version: number,
+  purpose: "wrap" | "hash",
+): Promise<CryptoKey> {
+  const master = masterKey(ring, version);
+  const name = `${purpose}:${version}`;
+  let key = ring.derivedKeys.get(name);
+  if (!key) {
+    key = deriveKeyBytes(master, purpose).then((bytes) =>
+      purpose === "wrap"
+        ? crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"])
+        : crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
+    );
+    ring.derivedKeys.set(name, key);
+  }
+  return key;
 }
 export async function keyringFingerprint(ring: Keyring): Promise<string> {
   const parts = await Promise.all(

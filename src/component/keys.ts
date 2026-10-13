@@ -10,10 +10,12 @@ import {
 import { internal } from "./_generated/api.js";
 import schema from "./schema.js";
 import { keyring, identity, envelope, event } from "./helpers.js";
-import { decryptEnvelope, rewrapEnvelope } from "../shared/envelope.js";
+import { decryptPayload, unwrapDataKey, wrapDataKey } from "../shared/envelope.js";
 import { lookupHash } from "../shared/value.js";
-import { keyringFingerprint, masterKey } from "../shared/keyring.js";
+import { keyringFingerprint, type Keyring } from "../shared/keyring.js";
+import { boundedPage } from "../shared/bounds.js";
 import { vaultError } from "../shared/errors.js";
+import { keyStatusResultValidator } from "../shared/validators.js";
 
 async function referencedVersions(ctx: QueryCtx, field: "keyVersion" | "hashVersion") {
   const versions: number[] = [];
@@ -25,11 +27,9 @@ async function referencedVersions(ctx: QueryCtx, field: "keyVersion" | "hashVers
         q.gt(field, after),
       )
       .first();
-    if (!row) return { versions, truncated: false };
-    const version = row[field];
-    if (version === undefined) throw vaultError("VAULT_INVALID_ARGUMENT");
-    versions.push(version);
-    after = version;
+    after = row?.[field];
+    if (after === undefined) return { versions, truncated: false };
+    versions.push(after);
   }
   const more = await ctx.db
     .query("values")
@@ -41,14 +41,7 @@ async function referencedVersions(ctx: QueryCtx, field: "keyVersion" | "hashVers
 }
 export const getStatus = query({
   args: {},
-  returns: v.object({
-    activeVersion: v.number(),
-    versions: v.array(
-      v.object({ version: v.number(), encrypted: v.boolean(), hashed: v.boolean() }),
-    ),
-    missingVersions: v.array(v.number()),
-    missingVersionsTruncated: v.boolean(),
-  }),
+  returns: keyStatusResultValidator,
   handler: async (ctx) => {
     const ring = keyring();
     const versions = [];
@@ -78,21 +71,22 @@ export const getStatus = query({
 });
 async function rotateBatch(
   ctx: MutationCtx,
+  ring: Keyring,
   cursor: string | null,
   fingerprint: string,
 ): Promise<void> {
-  const ring = keyring();
   if ((await keyringFingerprint(ring)) !== fingerprint) throw vaultError("VAULT_NOT_CONFIGURED");
   // Group both versions of each credential: one event and at most 100 values per batch.
   const page = await paginator(ctx.db, schema)
     .query("credentials")
-    .paginate({ numItems: 50, cursor });
+    .paginate(boundedPage({ numItems: 50, cursor }));
   for (const credential of page.page) {
     const rows = await ctx.db
       .query("values")
       .withIndex("by_credentialId_and_state", (q) => q.eq("credentialId", credential._id))
       .take(3);
-    if (rows.length > 2) throw vaultError("VAULT_INVALID_ARGUMENT");
+    if (rows.length > 2)
+      throw new Error("Corrupted vault state: credential has more than two values");
     let rekeyed = false;
     for (const row of rows) {
       if (
@@ -103,12 +97,14 @@ async function rotateBatch(
         continue;
       const bound = identity(credential, row);
       const encrypted = envelope(row);
+      const dataKey = await unwrapDataKey(ring, bound, encrypted);
       let hashes;
       if (credential.storage === "both") {
-        const value = await decryptEnvelope(ring, bound, encrypted);
+        const value = await decryptPayload(bound, encrypted, dataKey);
         hashes = {
           lookupHash: await lookupHash(
-            masterKey(ring, ring.active),
+            ring,
+            ring.active,
             credential.kind,
             credential.lookup === "owner" ? credential.owner : "",
             value,
@@ -117,7 +113,7 @@ async function rotateBatch(
         };
       }
       await ctx.db.patch("values", row._id, {
-        ...(await rewrapEnvelope(ring, bound, encrypted)),
+        ...(await wrapDataKey(ring, bound, dataKey)),
         ...hashes,
       });
       rekeyed = true;
@@ -134,7 +130,8 @@ export const rotate = mutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    await rotateBatch(ctx, null, await keyringFingerprint(keyring()));
+    const ring = keyring();
+    await rotateBatch(ctx, ring, null, await keyringFingerprint(ring));
     return null;
   },
 });
@@ -142,7 +139,7 @@ export const continueRotation = internalMutation({
   args: { cursor: v.string(), keyringFingerprint: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await rotateBatch(ctx, args.cursor, args.keyringFingerprint);
+    await rotateBatch(ctx, keyring(), args.cursor, args.keyringFingerprint);
     return null;
   },
 });

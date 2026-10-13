@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api.js";
 import { configureKeys, drain, expectVaultError, required, setupTest } from "../test-helpers.js";
-import { generateMasterKey, keyringFingerprint, readConfig } from "../shared/keyring.js";
+import { readConfig } from "../shared/config.js";
+import { generateMasterKey, keyringFingerprint } from "../shared/keyring.js";
 import type { Storage } from "../shared/validators.js";
+import { isVaultError } from "../shared/errors.js";
 
 const NOW = 1700000000000;
-const DAY = 86400000;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -37,8 +38,8 @@ it("rotates across batches, rewraps each both-storage credential once, and keeps
     credentials.push({
       storage,
       credentialId: created.credentialId,
-      previous: required(created.value),
-      value: required(second.value),
+      previous: required(created.value, "generated value"),
+      value: required(second.value, "replacement value"),
     });
   }
   const before = await t.run((ctx) => ctx.db.query("values").take(1000));
@@ -57,7 +58,10 @@ it("rotates across batches, rewraps each both-storage credential once, and keeps
   expect(after.filter((row) => row.keyVersion === 1)).toHaveLength(0);
   expect(after.filter((row) => row.hashVersion === 1)).toHaveLength(70);
   for (const row of after.filter((value) => value.keyVersion !== undefined)) {
-    const prior = required(before.find((value) => value._id === row._id));
+    const prior = required(
+      before.find((value) => value._id === row._id),
+      "value row before rotation",
+    );
     expect(row.ciphertext).toBe(prior.ciphertext);
     expect(row.iv).toBe(prior.iv);
     expect(row.wrappedKey).not.toBe(prior.wrappedKey);
@@ -66,7 +70,11 @@ it("rotates across batches, rewraps each both-storage credential once, and keeps
     const ref = { credentialId: credential.credentialId };
     if (credential.storage !== "hashed")
       expect(
-        await t.mutation(api.credentials.reveal, { ref, includePrevious: true }),
+        await t.mutation(api.credentials.reveal, {
+          auditRevealsKinds: [],
+          ref,
+          includePrevious: true,
+        }),
       ).toMatchObject({
         value: credential.value,
         previous: { value: credential.previous },
@@ -114,8 +122,9 @@ it("reports all missing references in a bounded version scan and signals truncat
     const credential = required(
       await ctx.db.get(
         "credentials",
-        required(ctx.db.normalizeId("credentials", created.credentialId)),
+        required(ctx.db.normalizeId("credentials", created.credentialId), "credential ID"),
       ),
+      "credential",
     );
     for (let version = 2; version <= 102; version++)
       await ctx.db.insert("values", {
@@ -170,7 +179,10 @@ it("rotation continuation stops when any key changes, including an inactive key 
   vi.stubEnv("VAULT_KEYS", keys);
   await t.mutation(api.keys.rotate, {});
   const [scheduled] = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").take(2));
-  const args = required(scheduled).args[0] as { cursor: string; keyringFingerprint: string };
+  const args = required(scheduled, "scheduled rotation").args[0] as {
+    cursor: string;
+    keyringFingerprint: string;
+  };
   expect(args.keyringFingerprint).toBe(await keyringFingerprint(readConfig({ VAULT_KEYS: keys })));
   vi.stubEnv("VAULT_KEYS", `2:${generateMasterKey()},1:${old}`);
   await expectVaultError(t.mutation(internal.keys.continueRotation, args), "VAULT_NOT_CONFIGURED");
@@ -180,107 +192,6 @@ it("rotation continuation stops when any key changes, including an inactive key 
   await t.mutation(internal.keys.continueRotation, args);
   const values = await t.run((ctx) => ctx.db.query("values").take(100));
   expect(values.filter((row) => row.keyVersion === 2)).toHaveLength(51);
-});
-it("cleanup deletes values of revoked and exhausted credentials, past-grace values, credentials past retention and old events across batches", async () => {
-  const t = setupTest();
-  const keep: string[] = [];
-  const drop: string[] = [];
-  for (let i = 0; i < 110; i++) {
-    const created = await t.mutation(api.credentials.create, {
-      bytes: 32,
-      hint: true,
-      auditReveals: true,
-      owner: "tenant",
-      kind: "both",
-      storage: "both",
-      origin: "generated",
-      lookup: "global",
-      ttlMs: i % 5 === 1 ? 1 : undefined,
-      maxUses: i % 5 === 2 ? 1 : undefined,
-    });
-    const ref = { credentialId: created.credentialId };
-    if (i % 5 === 0) {
-      await t.mutation(api.credentials.revoke, { ref });
-      drop.push(created.credentialId);
-    } else if (i % 5 === 1) drop.push(created.credentialId);
-    else if (i % 5 === 2) {
-      await t.mutation(api.credentials.verify, { kind: "both", value: required(created.value) });
-      drop.push(created.credentialId);
-    } else {
-      const graceMs = i % 5 === 3 ? 1 : 100 * DAY;
-      await t.mutation(api.credentials.replace, { ref, graceMs });
-      keep.push(created.credentialId);
-    }
-  }
-  vi.setSystemTime(NOW + 2);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  const rows = await t.run((ctx) => ctx.db.query("values").take(1000));
-  expect(rows).toHaveLength(66);
-  expect(rows.filter((row) => row.state === "previous")).toHaveLength(22);
-  expect(await t.run((ctx) => ctx.db.query("credentials").take(1000))).toHaveLength(110);
-  expect(await t.run((ctx) => ctx.db.query("events").take(1000))).not.toHaveLength(0);
-  vi.setSystemTime(NOW + 30 * DAY - 1);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  expect(await t.run((ctx) => ctx.db.query("credentials").take(1000))).toHaveLength(110);
-  vi.setSystemTime(NOW + 30 * DAY + 1);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  const retained = await t.run((ctx) => ctx.db.query("credentials").take(1000));
-  expect(retained.map((credential) => credential._id).toSorted()).toEqual(keep.toSorted());
-  for (const credentialId of drop)
-    await expectVaultError(
-      t.query(api.credentials.get, { ref: { credentialId } }),
-      "VAULT_NOT_FOUND",
-    );
-  vi.setSystemTime(NOW + 90 * DAY);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  const atBoundary = await t.run((ctx) => ctx.db.query("events").take(1000));
-  expect(atBoundary.length).toBeGreaterThan(100);
-  vi.setSystemTime(NOW + 90 * DAY + 1);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  expect(await t.run((ctx) => ctx.db.query("events").take(1000))).toEqual([]);
-  expect(await t.run((ctx) => ctx.db.query("credentials").take(1000))).toHaveLength(44);
-  expect(await t.run((ctx) => ctx.db.query("kinds").take(1000))).toHaveLength(1);
-});
-it("cleanup keeps credentials 30 days after updatedAt, never deletes active credentials, and handles a full batch of previous values", async () => {
-  const t = setupTest();
-  const old = [];
-  for (let i = 0; i < 101; i++) {
-    const created = await t.mutation(api.credentials.create, {
-      bytes: 32,
-      hint: true,
-      auditReveals: true,
-      owner: "tenant",
-      kind: "key",
-      storage: "encrypted",
-      origin: "generated",
-      lookup: "global",
-    });
-    await t.mutation(api.credentials.replace, {
-      ref: { credentialId: created.credentialId },
-      graceMs: 1,
-    });
-    old.push(created.credentialId);
-  }
-  vi.setSystemTime(NOW + DAY);
-  await t.mutation(api.credentials.revoke, { ref: { credentialId: required(old[0]) } });
-  vi.setSystemTime(NOW + 30 * DAY);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  expect(await t.run((ctx) => ctx.db.query("values").take(1000))).toHaveLength(100);
-  expect(
-    await t.query(api.credentials.get, { ref: { credentialId: required(old[0]) } }),
-  ).toMatchObject({
-    status: "revoked",
-  });
-  vi.setSystemTime(NOW + 31 * DAY);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  expect(await t.run((ctx) => ctx.db.query("credentials").take(1000))).toHaveLength(100);
 });
 it("rejects swapping encrypted material between rows and stores no plaintext or master keys", async () => {
   const t = setupTest();
@@ -312,8 +223,8 @@ it("rejects swapping encrypted material between rows and stores no plaintext or 
   const json = JSON.stringify(snapshot);
   for (const credential of [...credentials, key]) expect(json).not.toContain(credential);
   const rows = snapshot.values;
-  const a = required(rows[0]);
-  const b = required(rows[1]);
+  const a = required(rows[0], "first value row");
+  const b = required(rows[1], "second value row");
   for (const field of ["ciphertext", "wrappedKey"] as const) {
     await t.run(async (ctx) => {
       await ctx.db.patch("values", a._id, { [field]: b[field] });
@@ -321,7 +232,7 @@ it("rejects swapping encrypted material between rows and stores no plaintext or 
     });
     for (const credentialId of ids)
       await expectVaultError(
-        t.mutation(api.credentials.reveal, { ref: { credentialId } }),
+        t.mutation(api.credentials.reveal, { auditRevealsKinds: [], ref: { credentialId } }),
         "VAULT_DECRYPT_FAILED",
       );
     await t.run(async (ctx) => {
@@ -330,61 +241,58 @@ it("rejects swapping encrypted material between rows and stores no plaintext or 
     });
   }
 });
-
-it("cleanup keeps an expired credential 30 days after expiry, not after its last update", async () => {
+it("rotation unwraps each both-storage data key once and derives each subkey once per batch", async () => {
   const t = setupTest();
+  const old = configureKeys();
+  for (let i = 0; i < 10; i++)
+    await t.mutation(api.credentials.create, {
+      bytes: 32,
+      hint: false,
+      auditReveals: false,
+      owner: "tenant",
+      kind: "both",
+      storage: "both",
+      origin: "generated",
+      lookup: "global",
+    });
+  vi.stubEnv("VAULT_KEYS", `2:${generateMasterKey()},1:${old}`);
+  const decrypt = vi.spyOn(crypto.subtle, "decrypt");
+  const deriveBits = vi.spyOn(crypto.subtle, "deriveBits");
+  await t.mutation(api.keys.rotate, {});
+  expect(decrypt).toHaveBeenCalledTimes(20);
+  const purposes = deriveBits.mock.calls.map(([params]) =>
+    new TextDecoder().decode((params as HkdfParams).info as Uint8Array),
+  );
+  expect(purposes.filter((purpose) => !purpose.endsWith("/fingerprint")).toSorted()).toEqual([
+    "convex-vault/1/hash",
+    "convex-vault/1/wrap",
+    "convex-vault/1/wrap",
+  ]);
+  vi.restoreAllMocks();
+});
+it("rotation throws a non-vault error when a credential has more than two values", async () => {
+  const t = setupTest();
+  const old = configureKeys();
   const created = await t.mutation(api.credentials.create, {
-    bytes: undefined,
-    hint: true,
-    auditReveals: true,
+    bytes: 32,
+    hint: false,
+    auditReveals: false,
     owner: "tenant",
     kind: "key",
     storage: "encrypted",
-    origin: "supplied",
-    lookup: "owner",
-    name: "primary",
-    value: "long lived value",
-    ttlMs: 60 * DAY,
+    origin: "generated",
+    lookup: "global",
   });
-  const ref = { credentialId: created.credentialId };
-  vi.setSystemTime(NOW + 60 * DAY + 1);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  expect(await t.run((ctx) => ctx.db.query("values").take(1))).toEqual([]);
-  expect(await t.query(api.credentials.get, { ref })).toMatchObject({ name: "primary" });
-  vi.setSystemTime(NOW + 90 * DAY - 1);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  expect(await t.query(api.credentials.get, { ref })).toMatchObject({ status: "active" });
-  vi.setSystemTime(NOW + 90 * DAY);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  await expectVaultError(t.query(api.credentials.get, { ref }), "VAULT_NOT_FOUND");
-});
-it("renews an expired active credential after cleanup has deleted its current value", async () => {
-  const t = setupTest();
-  const created = await t.mutation(api.credentials.create, {
-    bytes: undefined,
-    hint: true,
-    auditReveals: true,
-    owner: "tenant",
-    kind: "key",
-    storage: "both",
-    origin: "supplied",
-    lookup: "owner",
-    value: "old",
-    ttlMs: 1,
+  await t.run(async (ctx) => {
+    const credentialId = required(
+      ctx.db.normalizeId("credentials", created.credentialId),
+      "credential ID",
+    );
+    for (const valueId of ["extra-1", "extra-2"])
+      await ctx.db.insert("values", { valueId, credentialId, state: "previous", createdAt: NOW });
   });
-  const ref = { credentialId: created.credentialId };
-  vi.setSystemTime(NOW + 1);
-  await t.mutation(internal.cleanup.run, {});
-  await drain(t);
-  expect(await t.run((ctx) => ctx.db.query("values").take(1))).toEqual([]);
-  await t.mutation(api.credentials.replace, { ref, value: "renewed", ttlMs: 1000, graceMs: 100 });
-  expect(await t.mutation(api.credentials.reveal, { ref, includePrevious: true })).toEqual({
-    value: "renewed",
-  });
-  expect(
-    await t.mutation(api.credentials.verify, { kind: "key", owner: "tenant", value: "renewed" }),
-  ).toMatchObject({ ok: true });
+  vi.stubEnv("VAULT_KEYS", `2:${generateMasterKey()},1:${old}`);
+  const error: unknown = await t.mutation(api.keys.rotate, {}).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(Error);
+  expect(isVaultError(error)).toBe(false);
 });

@@ -1,11 +1,7 @@
 # 0005: Reveal and verify are mutations that write the credential only for use limits and `lastUsedAt`
 
-## Decision
-
 Reveal and verify are mutations. Both consume uses from the same optional `maxUses` limit in the operation's transaction; the last use marks the credential exhausted, clears its name and records an exhausted event. Missing scopes and failed verifies do not consume a use.
 
-Without `maxUses`, reveal does not write the credential, and verify writes `lastUsedAt` only when it is absent or at least 60 seconds old. Reveal audit events are optional. Queries do not read wall-clock time.
+Without `maxUses`, reveal does not write the credential, and verify writes `lastUsedAt` only when it is absent or at least 60 seconds old. A reveal records an audit event when the credential's stored `auditReveals` or the client's current `auditReveals` for the credential's kind is true; the client sends the names of its audited kinds with every reveal, because a credential ID reference without `kind` does not tell the client the kind. Queries do not read wall-clock time.
 
-## Consequences
-
-Of concurrent operations on a single-use credential, Convex OCC lets exactly one succeed. A frequently used credential without `maxUses` gets no write on each reveal or verify, so its `lastUsedAt` is accurate only to 60 seconds. Credentials with `maxUses` serialize on the credential row; exact consumption requires that contention. Clearing the name of revoked and exhausted credentials permits reuse while keeping credential IDs and events.
+Of concurrent operations on a single-use credential, Convex OCC lets exactly one succeed. A frequently used credential without `maxUses` gets no write on each reveal or verify, so its `lastUsedAt` is accurate only to 60 seconds. Credentials with `maxUses` serialize on the credential row; exact consumption requires that contention. Turning `auditReveals` on in the client audits existing credentials of that kind; turning it off never stops auditing credentials created with it on. Clearing the name of revoked and exhausted credentials permits reuse while keeping credential IDs and events.

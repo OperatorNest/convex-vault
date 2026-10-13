@@ -61,9 +61,10 @@ export const credentialValidator = v.object({
   auditReveals: v.boolean(),
   createdAt: v.number(),
   updatedAt: v.number(),
+  valuesDeletedAt: v.optional(v.number()),
 });
 export const credentialResultValidator = credentialValidator
-  .omit("hint")
+  .omit("hint", "valuesDeletedAt")
   .extend({ credentialId: v.string(), hint: v.optional(v.string()) });
 export const eventValidator = v.object({
   credentialId: v.string(),
@@ -98,6 +99,12 @@ export const verifyResultValidator = v.union(
     reason: verificationFailureReasonValidator,
   }),
 );
+export const keyStatusResultValidator = v.object({
+  activeVersion: v.number(),
+  versions: v.array(v.object({ version: v.number(), encrypted: v.boolean(), hashed: v.boolean() })),
+  missingVersions: v.array(v.number()),
+  missingVersionsTruncated: v.boolean(),
+});
 /** Selects ciphertext, keyed hash or both for credential values. */
 export type Storage = Infer<typeof storageValidator>;
 /** Selects owner-scoped or global credential value lookup. */
@@ -116,6 +123,8 @@ export type ReplaceResult = Infer<typeof replaceResultValidator>;
 export type RevealResult = Infer<typeof revealResultValidator>;
 /** Reports verified credential ownership and scopes or a verification failure. */
 export type VerifyResult = Infer<typeof verifyResultValidator>;
+/** Reports configured master-key versions and the versions stored values reference. */
+export type KeyStatusResult = Infer<typeof keyStatusResultValidator>;
 
 /** Distinguishes generated credential values from supplied values. */
 export type Origin = Infer<typeof originValidator>;

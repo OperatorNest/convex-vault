@@ -39,7 +39,7 @@ it("authenticates every public operation and never accepts an owner argument", a
     t.query(api.example.list, { paginationOpts: { numItems: 2, cursor: null } }),
   ).rejects.toThrow(/Not signed in/);
   await expect(
-    t.query(api.example.listEvents, { paginationOpts: { numItems: 2, cursor: null } }),
+    t.query(api.example.eventsList, { paginationOpts: { numItems: 2, cursor: null } }),
   ).rejects.toThrow(/Not signed in/);
   const alice = t.withIdentity({ subject: "alice" });
   const bob = t.withIdentity({ subject: "bob" });
@@ -59,7 +59,7 @@ it("authenticates every public operation and never accepts an owner argument", a
     paginationOpts: { numItems: 2, cursor: null },
   });
   expect(list.page).toHaveLength(1);
-  const events = await alice.query(api.example.listEvents, {
+  const events = await alice.query(api.example.eventsList, {
     paginationOpts: { numItems: 100, cursor: null },
   });
   expect(events.page.some((event) => event.type === "replaced")).toBe(true);
@@ -131,17 +131,17 @@ it("drives all six kinds through the internal server-side wrappers", async () =>
   ).toHaveLength(6);
   expect(
     (
-      await t.query(internal.admin.listEvents, {
+      await t.query(internal.admin.eventsList, {
         ref: { owner: "tenant" },
         paginationOpts: { numItems: 100, cursor: null },
       })
     ).page.some((event) => event.type === "revoked"),
   ).toBe(true);
-  expect(await t.query(internal.admin.keyStatus, {})).toMatchObject({
+  expect(await t.query(internal.admin.keysGetStatus, {})).toMatchObject({
     activeVersion: 1,
     missingVersions: [],
   });
-  await t.mutation(internal.admin.rotateKeys, {});
+  await t.mutation(internal.admin.keysRotate, {});
   await t.finishAllScheduledFunctions(vi.runAllTimers);
 });
 it("rejects a missing value for supplied kinds and a supplied value for generated kinds", async () => {

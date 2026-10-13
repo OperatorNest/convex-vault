@@ -1,8 +1,6 @@
-# Working in this repository
+The package is `@operatornest/convex-vault`, component name `vault`.
 
 ## Scope
-
-The package is `@operatornest/convex-vault`, component name `vault`.
 
 The component stores supplied and generated credentials as ciphertext, a keyed hash, or both. App functions authenticate and authorize; component functions trust the opaque `owner` string the app passes.
 
@@ -12,23 +10,24 @@ Use the domain terms in [README Concepts](README.md#concepts). Read `README.md`,
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/component/`              | Tables, immutable kind policies, transactional lifecycle, key rotation and cleanup cron.                                                                   |
 | `src/client/`                 | Typed server-side `Vault` wrapper and exported types, validators, error guard and key generator.                                                           |
-| `src/shared/`                 | Pure keyring, HKDF, envelope encryption, lookup hashing, generation, hints, bounds and validators. No database or generated server imports.                |
+| `src/shared/`                 | Pure configuration, keyring, HKDF, envelope encryption, lookup hashing, generation, hints, bounds and validators. No database or generated server imports. |
 | `src/test.ts`                 | `register(t)` for consumer `convex-test` instances.                                                                                                        |
 | `src/test-helpers.ts`         | Test harness, generated test keys, error assertions and scheduler drain.                                                                                   |
 | `scripts/check-source.mjs`    | Test-enforced source rules: no module-scope randomness, index names that list their fields, no object spreads in client component arguments.               |
 | `bin/convex-vault.js`         | CLI (`generate-key`), a wrapper over `dist/shared/cli.js`. May use Node.                                                                                   |
 | `example/convex/`             | Minimal app covering all six storage and origin combinations. `example.ts` holds the authenticated public functions; `admin.ts` wraps every client method. |
-| `scripts/smoke.mjs`           | Acceptance journey against a local backend (`pnpm smoke`).                                                                                                 |
+| `scripts/smoke.mjs`           | Domain steps of the acceptance journey (`pnpm smoke`).                                                                                                     |
+| `scripts/smoke-harness.mjs`   | Shared smoke runner that starts the local backend and deploys the example; never edit.                                                                     |
 | `scripts/with-local-lock.mjs` | Shared local-backend lock; never edit.                                                                                                                     |
 
 Main flows:
 
 - **Create.** Validate the caller's kind policy and bounded inputs, record the policy on first use, obtain the credential row ID and generate value IDs within the executing mutation, probe every configured hash version for duplicates, then insert credential, current value, and audit event in one transaction.
-- **Reveal and verify.** Reject revoked, exhausted or expired credentials. Reveal decrypts and authenticates the value against its identity AAD; verify performs keyed lookup using the recorded kind policy, rejects a match outside a supplied `owner`, and checks required scopes. Credential ID references with `kind` resolve only that kind. Both consume uses from the same optional `maxUses` limit. Without `maxUses`, reveal writes nothing to the credential and verify writes `lastUsedAt` at most once per 60 seconds.
-- **Replace.** Preserve creation-time generation and hint settings; preserve expiry unless the caller renews it. Expired active credentials can be renewed only by a replace that passes `ttlMs` or `expiresAt`; without either, replace fails with `VAULT_INACTIVE`. Probe duplicates before removing any old value. Keep at most one previous value during grace; grace never extends the old value past its pre-replace expiry.
-- **Revoke.** Mark revoked and delete every value in the same transaction. Revoking a revoked credential by ID returns `null` without a change.
+- **Reveal and verify.** Reject revoked, exhausted or expired credentials. Reveal decrypts and authenticates the value against its identity AAD; verify performs keyed lookup using the recorded kind policy, rejects a match outside a supplied `owner`, and checks required scopes. Credential ID references with `kind` resolve only that kind. Reveal records an audit event when the credential's stored `auditReveals` is true or the client-sent `auditRevealsKinds` contains its kind; the client sends every configured kind whose current `auditReveals` is true. Both consume uses from the same optional `maxUses` limit. Without `maxUses`, reveal writes nothing to the credential and verify writes `lastUsedAt` at most once per 60 seconds.
+- **Replace.** Preserve creation-time generation and hint settings; preserve expiry unless the caller renews it. Expired active credentials can be renewed only by a replace that passes `ttlMs` or `expiresAt`; without either, replace fails with `VAULT_INACTIVE`. Probe duplicates before removing any old value. Clear `valuesDeletedAt` so cleanup deletes the renewed values after the renewed expiry. Keep at most one previous value during grace; grace never extends the old value past its pre-replace expiry.
+- **Revoke.** Mark revoked, set `valuesDeletedAt` and delete every value in the same transaction. Revoking a revoked credential by ID returns `null` without a change.
 - **Rotate keys.** Process 50 credentials and at most 100 values per transaction, then self-schedule on the immutable creation cursor. Rewrap `encrypted` values, rehash `both` values, and leave `hashed` values on their original hash version. Emit one rekey event per changed credential. Each batch compares a fingerprint of every configured version and key with the fingerprint taken when the job started; any difference stops the job with `VAULT_NOT_CONFIGURED`.
-- **Cleanup.** Every six hours, read exhausted and revoked credentials through `by_status_and_updatedAt` and expired credentials through `by_expiresAt` in batches of 50; delete their values, and delete revoked and exhausted credentials 30 days after `updatedAt` and expired active credentials 30 days after `expiresAt`; delete past-grace previous values in batches of 100; delete events strictly older than 90 days in batches of 100. Kind policies survive cleanup.
+- **Cleanup.** Every six hours, run seven phases in order, each in batches of 50 credentials or 100 rows that self-schedule: delete the values of exhausted and of expired active credentials whose `valuesDeletedAt` is unset, through `by_status_and_valuesDeletedAt_and_expiresAt`, and set `valuesDeletedAt`; delete exhausted and revoked credentials 30 days after `updatedAt` through `by_status_and_updatedAt`, and expired active credentials 30 days after `expiresAt` through `by_status_and_expiresAt`, with their remaining values; delete past-grace previous values; delete events strictly older than 90 days. A run reads no credential whose work is finished. Kind policies survive cleanup.
 
 ## Runtime and security boundaries
 
@@ -44,7 +43,7 @@ Main flows:
 
 ## Query and validator patterns
 
-Reuse `src/shared/validators.ts` and `schema.doc` instead of duplicating shapes. Every read is indexed and bounded. Use `paginator` from `convex-helpers/server/pagination` in components; never native pagination or unbounded collection. Page requests accept 1–100 items and read at most `numItems + 1` rows, including requests with `endCursor`; malformed cursors fail with `VAULT_INVALID_ARGUMENT`. Queries never read the wall clock. Index names list every field in order, joined by `_and_` (`by_owner_and_occurredAt`); `scripts/check-source.mjs` enforces this.
+Reuse `src/shared/validators.ts` and `schema.doc` instead of duplicating shapes. The client exports an explicit list of argument and result validators; never export a stored-row validator. Every read is indexed and bounded. Use `paginator` from `convex-helpers/server/pagination` in components; never native pagination or unbounded collection. Page requests accept 1–100 items and read at most `numItems + 1` rows, including requests with `endCursor`; malformed cursors fail with `VAULT_INVALID_ARGUMENT`. Queries never read the wall clock. Index names list every field in order, joined by `_and_` (`by_owner_and_occurredAt`); `scripts/check-source.mjs` enforces this.
 
 `keys.getStatus` uses indexed existence checks per configured version. Missing-version discovery walks up to 100 distinct versions per field and reports `missingVersionsTruncated` when more references exist. A truncated result is insufficient evidence to retire a key.
 

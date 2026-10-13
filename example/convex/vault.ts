@@ -1,5 +1,5 @@
 import { Vault, type CreateOptions, type CreateResult } from "@operatornest/convex-vault";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { components } from "./_generated/api.js";
 import type { MutationCtx } from "./_generated/server.js";
 
@@ -48,7 +48,7 @@ export const verifyKindValidator = v.union(
   v.literal("importedKey"),
   v.literal("dashboardKey"),
 );
-export type Kind = keyof typeof vault.options.kinds;
+export type Kind = Infer<typeof kindValidator>;
 
 export function create(
   ctx: MutationCtx,

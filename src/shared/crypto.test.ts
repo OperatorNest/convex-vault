@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { base64urlEncode, base64urlDecode } from "./base64url.js";
-import { readConfig, deriveKeyBytes, generateMasterKey } from "./keyring.js";
-import { encryptEnvelope, decryptEnvelope, rewrapEnvelope } from "./envelope.js";
+import { readConfig } from "./config.js";
+import { deriveKeyBytes, generateMasterKey } from "./keyring.js";
+import { encryptEnvelope, decryptEnvelope, unwrapDataKey, wrapDataKey } from "./envelope.js";
 import { lookupHash, generateValue, valueHint } from "./value.js";
 import { vaultError, isVaultError, VAULT_ERROR_CODES } from "./errors.js";
 import { expectVaultError } from "../test-helpers.js";
@@ -33,7 +34,8 @@ describe("credential cryptography", () => {
     expect(hex(await deriveKeyBytes(master, "hash"))).toBe(
       "aebd1d58cf7d06e2ea10f0956ba454797b213645c71e4f32597aeee7b12ca759",
     );
-    expect(await lookupHash(master, "apiKey", "tenant", "test credential")).toBe(
+    const ring = readConfig({ VAULT_KEYS: `1:${TEST_MASTER}` });
+    expect(await lookupHash(ring, 1, "apiKey", "tenant", "test credential")).toBe(
       "SdNROiMrjB-jwHvYDKZzmZQHeLJxdCzCOTnrevjIe-w",
     );
   });
@@ -85,13 +87,16 @@ describe("credential cryptography", () => {
   );
   it("rewraps without changing ciphertext and fails closed on corrupt or missing keys", async () => {
     const ring = readConfig({ VAULT_KEYS: `1:${TEST_MASTER},2:${generateMasterKey()}` });
-    const next = await rewrapEnvelope(ring, bound, vector);
+    const next = {
+      ...vector,
+      ...(await wrapDataKey(ring, bound, await unwrapDataKey(ring, bound, vector))),
+    };
     expect(next.ciphertext).toBe(vector.ciphertext);
     expect(next.iv).toBe(vector.iv);
     expect(next.keyVersion).toBe(2);
     expect(await decryptEnvelope(ring, bound, next)).toBe("test credential");
     await expectVaultError(
-      rewrapEnvelope(ring, { ...bound, owner: "other" }, vector),
+      unwrapDataKey(ring, { ...bound, owner: "other" }, vector),
       "VAULT_DECRYPT_FAILED",
     );
     await expectVaultError(
@@ -99,7 +104,7 @@ describe("credential cryptography", () => {
       "VAULT_NOT_CONFIGURED",
     );
     await expectVaultError(
-      rewrapEnvelope(readConfig({ VAULT_KEYS: `2:${TEST_MASTER}` }), bound, vector),
+      unwrapDataKey(readConfig({ VAULT_KEYS: `2:${TEST_MASTER}` }), bound, vector),
       "VAULT_NOT_CONFIGURED",
     );
     await expectVaultError(

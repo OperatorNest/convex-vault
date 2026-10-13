@@ -106,7 +106,7 @@ export const list = query({
     return vault.credentials.list(ctx, { ...options, owner });
   },
 });
-export const listEvents = query({
+export const eventsList = query({
   args: { paginationOpts: paginationOptsValidator },
   returns: paginationResultValidator(eventValidator),
   handler: async (ctx, { paginationOpts }) => {

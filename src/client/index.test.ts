@@ -103,7 +103,10 @@ it("registers the component and runs every client method against real component 
   expect(issued.value).toMatch(/^sk_[A-Za-z0-9_-]{22}$/);
   expect(
     await t.run((ctx) =>
-      vault.credentials.verify(ctx, { kind: "issued", value: required(issued.value) }),
+      vault.credentials.verify(ctx, {
+        kind: "issued",
+        value: required(issued.value, "issued value"),
+      }),
     ),
   ).toMatchObject({
     ok: true,
@@ -307,19 +310,18 @@ it("fails closed for undeclared kinds and storage-incompatible references at run
     "VAULT_INVALID_ARGUMENT",
   );
   // Simulate a JavaScript caller mutating options after TypeScript construction.
-  const changed = new Vault(components.vault, {
-    kinds: {
-      hash: { storage: "both", hint: false, auditReveals: true, lookup: "owner" },
-      credential: { storage: "both", lookup: "global", hint: false, auditReveals: true },
-    },
-  });
-  Object.assign(changed.options.kinds.hash, {
+  const changedKinds = {
+    hash: { storage: "both", hint: false, auditReveals: true, lookup: "owner" },
+    credential: { storage: "both", lookup: "global", hint: false, auditReveals: true },
+  } as const satisfies Record<string, KindOptions>;
+  const changed = new Vault(components.vault, { kinds: changedKinds });
+  Object.assign(changedKinds.hash, {
     storage: "hashed",
     hint: false,
     auditReveals: true,
     lookup: "owner",
   });
-  Object.assign(changed.options.kinds.credential, {
+  Object.assign(changedKinds.credential, {
     storage: "encrypted",
     hint: false,
     auditReveals: true,
@@ -335,4 +337,24 @@ it("fails closed for undeclared kinds and storage-incompatible references at run
     t.run((ctx) => changed.credentials.verify(ctx, { kind: "credential", value: "unused" })),
     "VAULT_NOT_VERIFIABLE",
   );
+});
+it("audits a reveal by credential ID without kind when the client's current policy for that kind audits reveals", async () => {
+  const t = setup();
+  const created = await t.run((ctx) =>
+    vault.credentials.create(ctx, { owner: "tenant", kind: "dual" }),
+  );
+  const ref = { credentialId: created.credentialId };
+  const revealed = async () =>
+    (
+      await t.run((ctx) =>
+        vault.events.list(ctx, { ref, paginationOpts: { numItems: 100, cursor: null } }),
+      )
+    ).page.filter((event) => event.type === "revealed");
+  await t.run((ctx) => vault.credentials.reveal(ctx, { ref }));
+  expect(await revealed()).toHaveLength(0);
+  const audited = new Vault(components.vault, {
+    kinds: { ...kinds, dual: { ...kinds.dual, auditReveals: true } },
+  });
+  await t.run((ctx) => audited.credentials.reveal(ctx, { ref, actor: "operator" }));
+  expect(await revealed()).toMatchObject([{ actor: "operator" }]);
 });

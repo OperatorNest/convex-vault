@@ -7,6 +7,7 @@ import {
   verifyResultValidator,
   credentialResultValidator,
   eventValidator,
+  keyStatusResultValidator,
   lifecycleFields,
   metadataValidator,
 } from "@operatornest/convex-vault";
@@ -107,7 +108,7 @@ export const list = internalQuery({
   returns: paginationResultValidator(credentialResultValidator),
   handler: (ctx, options) => vault.credentials.list(ctx, options),
 });
-export const listEvents = internalQuery({
+export const eventsList = internalQuery({
   args: {
     ref: v.union(v.object({ credentialId: v.string() }), v.object({ owner: v.string() })),
     paginationOpts: paginationOptsValidator,
@@ -116,19 +117,12 @@ export const listEvents = internalQuery({
   handler: (ctx, { ref, paginationOpts }) =>
     vault.events.list(ctx, { ref: ref, paginationOpts: paginationOpts }),
 });
-export const keyStatus = internalQuery({
+export const keysGetStatus = internalQuery({
   args: {},
-  returns: v.object({
-    activeVersion: v.number(),
-    versions: v.array(
-      v.object({ version: v.number(), encrypted: v.boolean(), hashed: v.boolean() }),
-    ),
-    missingVersions: v.array(v.number()),
-    missingVersionsTruncated: v.boolean(),
-  }),
+  returns: keyStatusResultValidator,
   handler: (ctx) => vault.keys.getStatus(ctx),
 });
-export const rotateKeys = internalMutation({
+export const keysRotate = internalMutation({
   args: {},
   returns: v.null(),
   handler: (ctx) => vault.keys.rotate(ctx),

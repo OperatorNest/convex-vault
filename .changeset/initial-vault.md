@@ -12,4 +12,3 @@ Export credential statuses, value states, event types, verification failure reas
 Store supplied and generated credentials as ciphertext, keyed hashes or both with expiry, use limits, replacement grace, revocation and audit events.
 Rotate wrapping and recoverable lookup keys in bounded batches while retaining original hash versions for hashed values.
 Provide `generate-key` and `generateMasterKey` for versioned master-key setup.
-Discard deleted module outputs before building the package from committed bindings.

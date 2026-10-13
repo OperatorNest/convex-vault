@@ -145,11 +145,15 @@ export const reveal = mutation({
   args: {
     ref: referenceValidator,
     includePrevious: v.optional(v.boolean()),
+    auditRevealsKinds: v.array(v.string()),
     actor: v.optional(v.string()),
   },
   returns: revealResultValidator,
   handler: async (ctx, args) => {
     const ring = keyring();
+    invalid(args.auditRevealsKinds.length > 100);
+    for (const kind of args.auditRevealsKinds) boundedString(kind, 128);
+    if (args.actor !== undefined) boundedString(args.actor, 256);
     const credential = await findCredential(ctx, args.ref);
     const now = Date.now();
     requireActive(credential, now);
@@ -170,7 +174,8 @@ export const reveal = mutation({
           validUntilAt: old.validUntilAt,
         };
     }
-    if (credential.auditReveals) await event(ctx, credential, "revealed", args.actor);
+    if (credential.auditReveals || args.auditRevealsKinds.includes(credential.kind))
+      await event(ctx, credential, "revealed", args.actor);
     await consume(ctx, credential, now, false, args.actor);
     return { value, ...(previous ? { previous } : {}) };
   },
@@ -247,6 +252,7 @@ export const replace = mutation({
   returns: replaceResultValidator,
   handler: async (ctx, args) => {
     const ring = keyring();
+    if (args.actor !== undefined) boundedString(args.actor, 256);
     const credential = await findCredential(ctx, args.ref);
     requireActive(credential);
     const now = Date.now();
@@ -281,7 +287,11 @@ export const replace = mutation({
         await ctx.db.patch("values", old._id, { state: "previous", validUntilAt });
       else await ctx.db.delete("values", old._id);
     }
-    await ctx.db.patch("credentials", credential._id, { expiresAt, updatedAt: now });
+    await ctx.db.patch("credentials", credential._id, {
+      expiresAt,
+      updatedAt: now,
+      valuesDeletedAt: undefined,
+    });
     await event(ctx, credential, "replaced", args.actor);
     return result;
   },
@@ -291,13 +301,16 @@ export const revoke = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     keyring();
+    if (args.actor !== undefined) boundedString(args.actor, 256);
     const credential = await findCredential(ctx, args.ref);
     if (credential.status === "revoked") return null;
     await deleteValues(ctx, credential);
+    const now = Date.now();
     await ctx.db.patch("credentials", credential._id, {
       status: "revoked",
       name: undefined,
-      updatedAt: Date.now(),
+      updatedAt: now,
+      valuesDeletedAt: now,
     });
     await event(ctx, credential, "revoked", args.actor);
     return null;
@@ -323,17 +336,19 @@ export const list = query({
     boundedString(args.owner, 256);
     if (args.kind !== undefined) boundedString(args.kind, 128);
     const pageRequest = boundedPage(args.paginationOpts);
-    const page = await paginator(ctx.db, schema)
-      .query("credentials")
-      .withIndex("by_owner_and_kind_and_createdAt", (q) =>
-        args.kind === undefined
-          ? q.eq("owner", args.owner)
-          : q.eq("owner", args.owner).eq("kind", args.kind),
-      )
+    const credentials = paginator(ctx.db, schema).query("credentials");
+    const { kind } = args;
+    const page = await (
+      kind === undefined
+        ? credentials.withIndex("by_owner_and_createdAt", (q) => q.eq("owner", args.owner))
+        : credentials.withIndex("by_owner_and_kind_and_createdAt", (q) =>
+            q.eq("owner", args.owner).eq("kind", kind),
+          )
+    )
       .order("desc")
       .paginate(pageRequest);
-    const credentials = [];
-    for (const credential of page.page) credentials.push(await projection(ctx, credential));
-    return { ...page, page: credentials };
+    const results = [];
+    for (const credential of page.page) results.push(await projection(ctx, credential));
+    return { ...page, page: results };
   },
 });

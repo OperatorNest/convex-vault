@@ -1,8 +1,8 @@
 import type {
+  GenericActionCtx,
   GenericDataModel,
   GenericMutationCtx,
   GenericQueryCtx,
-  GenericActionCtx,
   PaginationOptions,
 } from "convex/server";
 import type { ComponentApi } from "../component/_generated/component.js";
@@ -12,7 +12,44 @@ import type { Storage, Lookup, Metadata } from "../shared/validators.js";
 export { isVaultError, VAULT_ERROR_CODES } from "../shared/errors.js";
 export type { VaultErrorCode, VaultErrorData } from "../shared/errors.js";
 export { generateMasterKey } from "../shared/keyring.js";
-export * from "../shared/validators.js";
+export {
+  storageValidator,
+  originValidator,
+  lookupValidator,
+  metadataValidator,
+  referenceValidator,
+  lifecycleFields,
+  credentialStatusValidator,
+  valueStateValidator,
+  eventTypeValidator,
+  verificationFailureReasonValidator,
+  credentialResultValidator,
+  eventValidator,
+  createResultValidator,
+  replaceResultValidator,
+  revealResultValidator,
+  verifyResultValidator,
+  keyStatusResultValidator,
+} from "../shared/validators.js";
+export type {
+  Storage,
+  Lookup,
+  Reference,
+  Metadata,
+  Credential,
+  CreateResult,
+  ReplaceResult,
+  RevealResult,
+  VerifyResult,
+  KeyStatusResult,
+  Origin,
+  CredentialStatus,
+  ValueState,
+  EventType,
+  VerificationFailureReason,
+  VaultEvent,
+  PageStatus,
+} from "../shared/validators.js";
 
 /** Defines a credential kind's storage, lookup, generation and disclosure policy. */
 export type KindOptions = {
@@ -53,12 +90,14 @@ export type ReplaceOptions = {
 export type RevealOptions = { includePrevious?: boolean; actor?: string };
 /** Restricts verification to an owner and required scopes. */
 export type VerifyOptions = { owner?: string; requiredScopes?: string[] };
-/** Provides the stored-row query runner used by vault reads. */
+// shared-block:begin
+/** Runs component queries; app queries, mutations and actions provide it. */
 export type QueryContext = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
-/** Provides the transactional mutation runner used by credential operations. */
+/** Runs component mutations; app mutations and actions provide it. */
 export type MutationContext = Pick<GenericMutationCtx<GenericDataModel>, "runMutation">;
-/** Provides the action runner available to app actions. */
+/** Runs component actions; app actions provide it. */
 export type ActionContext = Pick<GenericActionCtx<GenericDataModel>, "runAction">;
+// shared-block:end
 
 type KindName<K> = Extract<keyof K, string>;
 type Allowed<K, S extends Storage> = {
@@ -95,15 +134,16 @@ function validateReference(options: VaultOptions, ref: VaultReference) {
 
 /** Calls credential, key and audit-event operations after app authorization. */
 export class Vault<const K extends Record<string, KindOptions> = Record<string, KindOptions>> {
-  public readonly options: VaultOptions<K> | VaultOptions<Record<string, never>>;
+  private readonly options: VaultOptions<K> | VaultOptions<Record<string, never>>;
   /** Binds the component and its app-defined credential kinds to this client. */
   constructor(
-    public readonly component: ComponentApi,
+    private readonly component: ComponentApi,
     options?: VaultOptions<K>,
   ) {
     this.options = options ?? { kinds: {} };
   }
-  credentials = {
+  /** Creates, reveals, verifies, replaces, revokes, reads and lists encrypted credentials. */
+  readonly credentials = {
     /** Creates a credential and returns plaintext only for a generated kind. */
     create: <N extends KindName<K>>(ctx: MutationContext, args: { kind: N } & CreateFor<K[N]>) => {
       const policy = requireKind(this.options, args.kind);
@@ -128,7 +168,7 @@ export class Vault<const K extends Record<string, KindOptions> = Record<string, 
         maxUses: args.maxUses ?? policy.maxUses,
       });
     },
-    /** Reveals the current plaintext and optionally the previous plaintext during grace. */
+    /** Reveals the current plaintext, optionally the previous plaintext during grace, and audits it when the kind's current or stored policy sets `auditReveals`. */
     reveal: (
       ctx: MutationContext,
       args: { ref: VaultReference<Allowed<K, "encrypted" | "both">> } & RevealOptions,
@@ -141,6 +181,9 @@ export class Vault<const K extends Record<string, KindOptions> = Record<string, 
       return ctx.runMutation(this.component.credentials.reveal, {
         ref: validateReference(this.options, args.ref),
         includePrevious: args.includePrevious,
+        auditRevealsKinds: Object.entries(this.options.kinds)
+          .filter(([, policy]) => policy.auditReveals)
+          .map(([kind]) => kind),
         actor: args.actor,
       });
     },
@@ -188,17 +231,23 @@ export class Vault<const K extends Record<string, KindOptions> = Record<string, 
       return ctx.runQuery(this.component.credentials.list, {
         owner: args.owner,
         kind: args.kind,
-        paginationOpts: args.paginationOpts,
+        paginationOpts: {
+          numItems: args.paginationOpts.numItems,
+          cursor: args.paginationOpts.cursor,
+          endCursor: args.paginationOpts.endCursor,
+        },
       });
     },
   };
-  keys = {
+  /** Reports and rotates the deployed encryption key versions. */
+  readonly keys = {
     /** Reads configured master-key versions and the versions referenced by stored values. */
     getStatus: (ctx: QueryContext) => ctx.runQuery(this.component.keys.getStatus, {}),
     /** Starts batched rewrapping and rehashing with the active master-key version. */
     rotate: (ctx: MutationContext) => ctx.runMutation(this.component.keys.rotate, {}),
   };
-  events = {
+  /** Lists the audit events recorded for credentials. */
+  readonly events = {
     /** Lists stored audit events for a credential or an owner. */
     list: (
       ctx: QueryContext,
@@ -212,7 +261,11 @@ export class Vault<const K extends Record<string, KindOptions> = Record<string, 
           "credentialId" in args.ref
             ? { credentialId: args.ref.credentialId }
             : { owner: args.ref.owner },
-        paginationOpts: args.paginationOpts,
+        paginationOpts: {
+          numItems: args.paginationOpts.numItems,
+          cursor: args.paginationOpts.cursor,
+          endCursor: args.paginationOpts.endCursor,
+        },
       }),
   };
 }

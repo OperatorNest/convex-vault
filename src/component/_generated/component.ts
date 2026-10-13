@@ -150,6 +150,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           actor?: string;
+          auditRevealsKinds: Array<string>;
           includePrevious?: boolean;
           ref:
             | { credentialId: string; kind?: string }

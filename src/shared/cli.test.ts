@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { runCli } from "./cli.js";
-import { readConfig } from "./keyring.js";
+import { readConfig } from "./config.js";
 
 it("generates fresh canonical 32-byte keys for the selected version", () => {
   for (const [args, version] of [

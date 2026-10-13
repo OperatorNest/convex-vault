@@ -1,5 +1,7 @@
 import { ConvexError } from "convex/values";
+import { truncateText } from "./bounds.js";
 
+// repository-codes:begin
 export const VAULT_ERROR_CODES = [
   "VAULT_NOT_CONFIGURED",
   "VAULT_INVALID_ARGUMENT",
@@ -12,10 +14,8 @@ export const VAULT_ERROR_CODES = [
   "VAULT_INACTIVE",
   "VAULT_DECRYPT_FAILED",
 ] as const;
-/** Identifies a fixed vault failure that callers can handle by code. */
-export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[number];
-/** Carries a vault error code and its fixed message. */
-export type VaultErrorData = { code: VaultErrorCode; message: string };
+
+const VAULT_PROVIDER_ERROR_CODES = [] as const satisfies readonly VaultErrorCode[];
 
 const VAULT_ERROR_MESSAGES = {
   VAULT_NOT_CONFIGURED:
@@ -32,22 +32,80 @@ const VAULT_ERROR_MESSAGES = {
     "The credential is revoked or exhausted, or expired for a reveal or for a replace without new expiry.",
   VAULT_DECRYPT_FAILED: "The payload or wrapped key failed authentication.",
 } as const satisfies Record<VaultErrorCode, string>;
+// repository-codes:end
 
-export function vaultError(code: VaultErrorCode): ConvexError<VaultErrorData> {
-  return new ConvexError({ code, message: VAULT_ERROR_MESSAGES[code] });
+const ERROR_DATA_KEYS: ReadonlySet<string> = new Set([
+  "code",
+  "message",
+  "retryable",
+  "providerStatus",
+  "providerCode",
+]);
+
+/** One fixed caller-visible failure; `VAULT_ERROR_CODES` lists every code. */
+export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[number];
+
+/** Error data: the code, its fixed message and bounded provider failure details. `retryable` is present exactly on provider-originated codes. */
+export type VaultErrorData = {
+  code: VaultErrorCode;
+  message: string;
+  retryable?: boolean;
+  providerStatus?: number;
+  providerCode?: string;
+};
+
+type ProviderErrorCode = (typeof VAULT_PROVIDER_ERROR_CODES)[number];
+
+type ErrorDetails<Code extends VaultErrorCode> = [Code] extends [
+  Exclude<VaultErrorCode, ProviderErrorCode>,
+]
+  ? [details?: { retryable?: never; providerStatus?: number; providerCode?: string }]
+  : [details: { retryable: boolean; providerStatus?: number; providerCode?: string }];
+
+function isProviderErrorCode(code: unknown): code is ProviderErrorCode {
+  return VAULT_PROVIDER_ERROR_CODES.some((candidate) => candidate === code);
 }
-/** Recognizes a vault error only when its code and fixed message agree. */
+
+/** Creates the error for `code` with its fixed message. Provider-originated codes require `details.retryable`; other codes forbid it. `providerCode` is truncated to 64 characters. */
+export function vaultError<Code extends VaultErrorCode>(
+  code: Code,
+  ...[details]: ErrorDetails<Code>
+): ConvexError<VaultErrorData> {
+  return new ConvexError({
+    code,
+    message: VAULT_ERROR_MESSAGES[code],
+    ...(isProviderErrorCode(code) &&
+      details?.retryable !== undefined && { retryable: details.retryable }),
+    ...(details?.providerStatus !== undefined && { providerStatus: details.providerStatus }),
+    ...(details?.providerCode !== undefined && {
+      providerCode: truncateText(details.providerCode, 64),
+    }),
+  });
+}
+
+/** Returns true when `error` carries exactly a known code, its fixed message, `retryable` on provider-originated codes only, and well-formed provider details. */
 export function isVaultError(error: unknown): error is ConvexError<VaultErrorData> {
   if (!(error instanceof ConvexError)) return false;
   const data: unknown = error.data;
+  if (typeof data !== "object" || data === null || !("code" in data) || !("message" in data))
+    return false;
+  const { code, message } = data;
   return (
-    typeof data === "object" &&
-    data !== null &&
-    "code" in data &&
-    "message" in data &&
-    typeof data.message === "string" &&
+    Object.keys(data).every((key) => ERROR_DATA_KEYS.has(key)) &&
     VAULT_ERROR_CODES.some(
-      (code) => code === data.code && data.message === VAULT_ERROR_MESSAGES[code],
-    )
+      (candidate) => candidate === code && message === VAULT_ERROR_MESSAGES[candidate],
+    ) &&
+    ("retryable" in data
+      ? isProviderErrorCode(code) && typeof data.retryable === "boolean"
+      : !isProviderErrorCode(code)) &&
+    (!("providerStatus" in data) ||
+      (typeof data.providerStatus === "number" &&
+        Number.isInteger(data.providerStatus) &&
+        data.providerStatus >= 100 &&
+        data.providerStatus <= 599)) &&
+    (!("providerCode" in data) ||
+      (typeof data.providerCode === "string" &&
+        data.providerCode.isWellFormed() &&
+        data.providerCode.length <= 64))
   );
 }
