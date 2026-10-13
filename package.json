@@ -1,6 +1,6 @@
 {
   "name": "@operatornest/convex-vault",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Encrypted and hashed credential storage for Convex with owners, expiry, use limits and key rotation.",
   "keywords": [
     "component",
