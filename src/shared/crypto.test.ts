@@ -138,6 +138,9 @@ describe("configuration and presentation", () => {
     `1: ${TEST_MASTER}`,
     `1:${TEST_MASTER.slice(0, -1)}9`,
     "1:!",
+    ` 1:${TEST_MASTER}`,
+    `1:${TEST_MASTER}\n`,
+    `1:${TEST_MASTER}\ud800`,
   ])("rejects malformed keyrings (%s)", (config) => {
     expect(() => readConfig({ VAULT_KEYS: config })).toThrowError("VAULT_NOT_CONFIGURED");
   });

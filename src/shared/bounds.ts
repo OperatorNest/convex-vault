@@ -13,6 +13,13 @@ export function truncateText(value: string, max: number): string {
   return text.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end);
 }
 
+/** Returns `value` when it is non-empty, well-formed and at most `maxLength` UTF-16 code units; otherwise throws `VAULT_INVALID_ARGUMENT`. */
+export function boundedString(value: string, maxLength: number): string {
+  if (value.length === 0 || value.length > maxLength || !value.isWellFormed())
+    throw vaultError("VAULT_INVALID_ARGUMENT");
+  return value;
+}
+
 /** Throws `VAULT_INVALID_ARGUMENT` unless `cursor` is well-formed, at most 4096 characters, and a JSON array of at most 16 primitive values whose strings are well-formed. */
 export function validateCursor(cursor: string): void {
   const isBoundedText = cursor.length <= 4096 && cursor.isWellFormed();
@@ -57,9 +64,6 @@ export function boundedPage(options: PaginationOptions): PaginationOptions {
 
 export function invalid(condition: boolean): void {
   if (condition) throw vaultError("VAULT_INVALID_ARGUMENT");
-}
-export function boundedString(value: string, max: number): void {
-  invalid(value.length === 0 || value.length > max);
 }
 export function validateValue(value: string, globalSupplied: boolean): void {
   const length = utf8(value).byteLength;

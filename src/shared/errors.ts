@@ -21,7 +21,7 @@ const VAULT_PROVIDER_ERROR_CODES = [] as const satisfies readonly VaultErrorCode
 const VAULT_ERROR_MESSAGES = {
   VAULT_NOT_CONFIGURED:
     "VAULT_KEYS is missing or malformed, lacks a required key version, or changed during key rotation.",
-  VAULT_INVALID_ARGUMENT: "An argument is invalid, missing or out of bounds.",
+  VAULT_INVALID_ARGUMENT: "An argument is missing, malformed or out of bounds.",
   VAULT_NOT_FOUND: "The credential, name or required current value does not exist.",
   VAULT_NOT_REVEALABLE:
     "The credential's kind stores only a hash, so its value cannot be revealed.",
@@ -50,6 +50,7 @@ export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[number];
 export type VaultErrorData = {
   code: VaultErrorCode;
   message: string;
+  /** `true` only when repeating the identical call cannot create a second provider effect: the call is a read, the call carries an idempotency key the component or provider deduplicates, or the provider definitively refused without effect. */
   retryable?: boolean;
   providerStatus?: number;
   providerCode?: string;

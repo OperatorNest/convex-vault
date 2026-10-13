@@ -5,7 +5,7 @@ Encrypted and hashed credential storage for Convex. One component stores custome
 ## Install
 
 ```sh
-pnpm add @operatornest/convex-vault convex convex-helpers
+pnpm add @operatornest/convex-vault convex@^1.46.0 convex-helpers@^0.1.128
 ```
 
 Requires Convex 1.46 or newer and, for the CLI and tests, Node.js 24 or newer. The component uses WebCrypto and has no runtime dependencies; `convex` and `convex-helpers` are peer dependencies.
@@ -29,7 +29,7 @@ npx @operatornest/convex-vault generate-key
 
 `generate-key --version <n>` sets the key version; the default is 1. Store the output in the Convex environment variable `VAULT_KEYS` through the dashboard or `pnpm exec convex env set VAULT_KEYS '<version>:<key>'`. Never commit keys or pass them as function arguments.
 
-`VAULT_KEYS` is a comma-separated keyring of `<version>:<key>` pairs, such as `2:<new-key>,1:<old-key>`. Each version is a unique positive safe integer; each key is exactly 32 bytes in canonical, unpadded base64url. The highest version encrypts and hashes new values. A missing or malformed keyring fails every operation except cleanup with `VAULT_NOT_CONFIGURED`; cleanup deletes without keys.
+`VAULT_KEYS` is a comma-separated keyring of `<version>:<key>` pairs, such as `2:<new-key>,1:<old-key>`. Each version is a unique positive safe integer; each key is exactly 32 bytes in canonical, unpadded base64url. The highest version encrypts and hashes new values. A missing, empty, malformed or whitespace-padded keyring fails every operation except cleanup with `VAULT_NOT_CONFIGURED`; cleanup deletes without keys.
 
 ### Install the component
 
@@ -319,7 +319,7 @@ Every vault error is a `ConvexError<{ code, message }>` with a fixed message. `i
 | Code                     | Message                                                                                              | When                                                                                                 |
 | ------------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `VAULT_NOT_CONFIGURED`   | VAULT_KEYS is missing or malformed, lacks a required key version, or changed during key rotation.    | Component env is absent or malformed, a referenced key is absent, or rotation configuration changed. |
-| `VAULT_INVALID_ARGUMENT` | An argument is invalid, missing or out of bounds.                                                    | An input, cursor or page size fails validation.                                                      |
+| `VAULT_INVALID_ARGUMENT` | An argument is missing, malformed or out of bounds.                                                  | An input, cursor or page size fails validation.                                                      |
 | `VAULT_NOT_FOUND`        | The credential, name or required current value does not exist.                                       | A credential reference or required current value cannot be resolved.                                 |
 | `VAULT_NOT_REVEALABLE`   | The credential's kind stores only a hash, so its value cannot be revealed.                           | Reveal targets a hashed kind.                                                                        |
 | `VAULT_NOT_VERIFIABLE`   | The kind stores only ciphertext, so its values cannot be verified.                                   | Verify targets an encrypted kind.                                                                    |
@@ -359,7 +359,7 @@ Use keys from `generateMasterKey()`, fake timers for expiry and grace, and `awai
 | Cursor                  | 4096 characters; a JSON array of at most 16 primitive values             |
 | Audited kinds           | 100 kinds with `auditReveals: true` per client; 128 characters each      |
 
-Character limits count UTF-16 code units (JavaScript `string.length`); hint thresholds count Unicode code points.
+Character limits count UTF-16 code units (JavaScript `string.length`) and reject strings with unpaired surrogates; hint thresholds count Unicode code points.
 
 For `hashed` and `both` kinds, create and replace reject a value whose hash matches any stored current or previous value, under every configured hash version, including expired values that cleanup has not yet deleted. With owner lookup, two owners can store the same supplied value.
 

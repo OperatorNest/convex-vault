@@ -12,3 +12,6 @@ Run cleanup without `VAULT_KEYS`; a missing or malformed keyring no longer stops
 Read the current value row in `credentials.get` and `credentials.list` only for credentials that store a hint.
 Replace the `lifecycleFields` export with `lifecycleValidator`; spread `lifecycleValidator.fields` into function arguments.
 Document that `verify` returns `expired` or `exhausted` until cleanup deletes the credential's values, then `not_found`.
+Reject an owner, kind, name, label, actor, scope, credential ID reference or configured kind name that contains an unpaired surrogate with `VAULT_INVALID_ARGUMENT`.
+Reject a `VAULT_KEYS` value with leading or trailing whitespace or an unpaired surrogate with `VAULT_NOT_CONFIGURED`.
+Change the `VAULT_INVALID_ARGUMENT` message to "An argument is missing, malformed or out of bounds."

@@ -835,6 +835,7 @@ describe("argument bounds", () => {
   it.each([
     { owner: "" },
     { owner: "x".repeat(257) },
+    { owner: "tenant\ud800" },
     { kind: "x".repeat(129) },
     { name: "x".repeat(129) },
     { label: "x".repeat(257) },

@@ -362,6 +362,7 @@ it("audits a reveal by credential ID without kind when the client's current poli
 it.each([
   ["an empty kind name", { "": kinds.provider }],
   ["a 129-character kind name", { ["k".repeat(129)]: kinds.dual }],
+  ["a kind name that is not well-formed UTF-16", { "kind\ud800": kinds.dual }],
   [
     "101 audited kinds",
     Object.fromEntries(Array.from({ length: 101 }, (_, index) => [`kind${index}`, kinds.provider])),

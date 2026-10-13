@@ -2,10 +2,9 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi } from "convex/server";
-import { runSmoke, step } from "./smoke-harness.mjs";
+import { assertSmoke, errorCodeOf, runSmoke, step, waitFor } from "./smoke-harness.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const plaintexts = new Set();
@@ -14,11 +13,8 @@ let backend;
 let publicClient;
 let snapshotNumber = 0;
 
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
 function equal(actual, expected, message) {
-  assert(JSON.stringify(actual) === JSON.stringify(expected), message);
+  assertSmoke(JSON.stringify(actual) === JSON.stringify(expected), message);
 }
 async function item(description, fn) {
   await step(description, async () => {
@@ -29,20 +25,12 @@ async function item(description, fn) {
     // Never echo a server response, command arguments, snapshot data, plaintext or keys.
     if (failure !== null)
       throw new Error(
-        failure.error instanceof Error && failure.error.message.startsWith("Smoke:")
+        failure.error instanceof Error &&
+          /^(?:Smoke:|waitFor timed out)/.test(failure.error.message)
           ? failure.error.message
-          : "check failed",
+          : (errorCodeOf(failure.error) ?? "check failed"),
       );
   });
-}
-async function waitFor(description, fn, timeout = 300_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const result = await fn();
-    if (result) return result;
-    await sleep(100);
-  }
-  throw new Error(`Smoke: timed out waiting for ${description}`);
 }
 async function cli(args, input) {
   try {
@@ -66,15 +54,7 @@ async function code(promise) {
     await promise;
     return "no_error";
   } catch (error) {
-    let data = error.data;
-    if (typeof data === "string") {
-      try {
-        data = JSON.parse(data);
-      } catch {
-        data = undefined;
-      }
-    }
-    return data?.code ?? /VAULT_[A-Z_]+/.exec(String(error.message))?.[0] ?? "unknown_error";
+    return errorCodeOf(error) ?? "unknown_error";
   }
 }
 function generateTestValue() {
@@ -101,7 +81,7 @@ async function setKeys(config) {
 }
 async function configured(config, version) {
   await setKeys(config);
-  await waitFor("keyring update", async () => {
+  await waitFor(async () => {
     try {
       return (await query("keysGetStatus")).activeVersion === version;
     } catch {
@@ -115,7 +95,7 @@ function generateKey(version) {
     [join(root, "bin/convex-vault.js"), "generate-key", "--version", String(version)],
     { encoding: "utf8" },
   ).trim();
-  assert(new RegExp(`^${version}:[A-Za-z0-9_-]{43}$`).test(line), "Smoke: CLI key format");
+  assertSmoke(new RegExp(`^${version}:[A-Za-z0-9_-]{43}$`).test(line), "Smoke: CLI key format");
   const key = line.slice(line.indexOf(":") + 1);
   keys.push(key);
   return line;
@@ -143,7 +123,7 @@ async function snapshot() {
         : [],
     );
   }
-  assert(
+  assertSmoke(
     ["credentials", "values", "events", "kinds"].every((table) => tables.has(table)),
     "Smoke: snapshot missing a component table",
   );
@@ -160,7 +140,7 @@ async function areValuesDeleted(credentialIds) {
 }
 async function runCleanup(credentialIds) {
   equal(await cliRunComponent("cleanup:run", {}), "no_error", "Smoke: cleanup run failed");
-  await waitFor("cleanup", () => areValuesDeleted(credentialIds));
+  await waitFor(() => areValuesDeleted(credentialIds));
 }
 async function importValues(rows) {
   const path = join(backend.workspace, "values.jsonl");
@@ -196,11 +176,11 @@ async function journey(smokeBackend) {
       });
       const ref = { credentialId: credential.credentialId };
       const value = credential.value ?? first;
-      assert(generated === (credential.value !== undefined), "Smoke: plaintext return policy");
+      assertSmoke(generated === (credential.value !== undefined), "Smoke: plaintext return policy");
       if (storage !== "hashed")
         equal((await mutation("reveal", { ref })).value, value, "Smoke: reveal differs");
       if (storage !== "encrypted")
-        assert(
+        assertSmoke(
           (await mutation("verify", { kind, owner: "smoke", value, requiredScopes: ["read"] })).ok,
           "Smoke: verify rejected",
         );
@@ -217,7 +197,7 @@ async function journey(smokeBackend) {
       }
       if (storage !== "encrypted")
         for (const token of [value, current])
-          assert(
+          assertSmoke(
             (await mutation("verify", { kind, owner: "smoke", value: token })).ok,
             "Smoke: grace verification rejected",
           );
@@ -231,7 +211,7 @@ async function journey(smokeBackend) {
           "Smoke: revoked reveal accepted",
         );
       if (storage !== "encrypted")
-        assert(
+        assertSmoke(
           !(await mutation("verify", { kind, owner: "smoke", value: current })).ok,
           "Smoke: revoked verify accepted",
         );
@@ -246,12 +226,12 @@ async function journey(smokeBackend) {
       owner: "smoke",
       paginationOpts: { numItems: 2, cursor: null },
     });
-    assert(page.page.length === 2 && !page.isDone, "Smoke: paginator failed");
+    assertSmoke(page.page.length === 2 && !page.isDone, "Smoke: paginator failed");
     const next = await query("list", {
       owner: "smoke",
       paginationOpts: { numItems: 2, cursor: page.continueCursor },
     });
-    assert(
+    assertSmoke(
       next.page.length === 2 && next.page[0].credentialId !== page.page[0].credentialId,
       "Smoke: paginator did not advance",
     );
@@ -259,7 +239,7 @@ async function journey(smokeBackend) {
       ref: { owner: "smoke" },
       paginationOpts: { numItems: 100, cursor: null },
     });
-    assert(
+    assertSmoke(
       events.page.some((event) => event.type === "revoked"),
       "Smoke: revoke event missing",
     );
@@ -269,7 +249,7 @@ async function journey(smokeBackend) {
         () => "accepted",
         (error) => error.message,
       );
-    assert(
+    assertSmoke(
       rejectedCreate.includes("Not signed in"),
       "Smoke: public create accepts anonymous caller",
     );
@@ -279,7 +259,7 @@ async function journey(smokeBackend) {
         () => "accepted",
         (error) => error.message,
       );
-    assert(
+    assertSmoke(
       unauthenticated.includes("Not signed in"),
       "Smoke: public list accepts anonymous caller",
     );
@@ -296,7 +276,7 @@ async function journey(smokeBackend) {
     const indexes = ids.map((id) =>
       rows.findIndex((row) => row.credentialId === id && row.state === "current"),
     );
-    assert(
+    assertSmoke(
       indexes.every((index) => index >= 0),
       "Smoke: tamper targets missing",
     );
@@ -374,13 +354,11 @@ async function journey(smokeBackend) {
       const during = await mutation("reveal", { ref, includePrevious: true });
       equal([during.value, during.previous?.value], [current, first], "Smoke: grace plaintexts");
       await waitFor(
-        "previous grace expiry",
         async () => !(await mutation("reveal", { ref, includePrevious: true })).previous,
       );
       const expiring = await create("providerKey", { value: generateTestValue(), ttlMs: 1000 });
       const expiredRef = { credentialId: expiring.credentialId };
       await waitFor(
-        "credential expiry",
         async () => (await code(mutation("reveal", { ref: expiredRef }))) === "VAULT_INACTIVE",
       );
       const renewed = generateTestValue();
@@ -424,14 +402,14 @@ async function journey(smokeBackend) {
       const expiredRef = { credentialId: expiring.credentialId };
       const expired = async () =>
         (await code(mutation("reveal", { ref: expiredRef }))) === "VAULT_INACTIVE";
-      await waitFor("credential expiry", expired);
+      await waitFor(expired);
       await runCleanup([exhausted.credentialId, expiring.credentialId]);
       await replace(expiredRef, { value: generateTestValue(), ttlMs: 1000 });
-      assert(
+      assertSmoke(
         !(await areValuesDeleted([expiring.credentialId])),
         "Smoke: renewal kept values deleted",
       );
-      await waitFor("renewed credential expiry", expired);
+      await waitFor(expired);
       await runCleanup([expiring.credentialId]);
     },
   );
@@ -482,10 +460,13 @@ async function journey(smokeBackend) {
       );
       await configured(`${two},${one}`, 2);
       await mutation("keysRotate");
-      await waitFor("rotation to stop referencing wrap key 1", async () => {
-        const status = await query("keysGetStatus");
-        return status.versions.find((row) => row.version === 1)?.encrypted === false;
-      });
+      await waitFor(
+        async () => {
+          const status = await query("keysGetStatus");
+          return status.versions.find((row) => row.version === 1)?.encrypted === false;
+        },
+        { timeoutMs: 300_000 },
+      );
       const bothIds = new Set(
         rotationCredentials
           .filter((credential) => credential.storage === "both")
@@ -517,7 +498,7 @@ async function journey(smokeBackend) {
         ),
       );
       await chunks(both, async (credential) =>
-        assert(
+        assertSmoke(
           (
             await mutation("verify", {
               kind: "importedKey",
@@ -531,7 +512,7 @@ async function journey(smokeBackend) {
       const hashCredential = rotationCredentials.find((row) => row._id === hashed.credentialId);
       const hashRow = after.get("values").find((row) => row.credentialId === hashCredential._id);
       equal(hashRow.hashVersion, 1, "Smoke: hashed-only version changed");
-      assert(
+      assertSmoke(
         (await mutation("verify", { kind: "apiKey", value: hashed.value })).ok,
         "Smoke: old hashed-only key no longer verifies",
       );
@@ -543,17 +524,11 @@ async function journey(smokeBackend) {
   );
   await item("unset and malformed VAULT_KEYS both fail with VAULT_NOT_CONFIGURED", async () => {
     await cli(["env", "remove", "VAULT_KEYS"]);
-    await waitFor(
-      "unset configuration",
-      async () => (await code(query("keysGetStatus"))) === "VAULT_NOT_CONFIGURED",
-    );
+    await waitFor(async () => (await code(query("keysGetStatus"))) === "VAULT_NOT_CONFIGURED");
     equal(await code(create("apiKey")), "VAULT_NOT_CONFIGURED", "Smoke: unset create accepted");
     for (const malformed of ["bad", `1:${keys[0]},1:${keys[0]}`, "1:AA"]) {
       await setKeys(malformed);
-      await waitFor(
-        "malformed configuration",
-        async () => (await code(query("keysGetStatus"))) === "VAULT_NOT_CONFIGURED",
-      );
+      await waitFor(async () => (await code(query("keysGetStatus"))) === "VAULT_NOT_CONFIGURED");
       equal(
         await code(create("apiKey")),
         "VAULT_NOT_CONFIGURED",
@@ -573,7 +548,7 @@ async function journey(smokeBackend) {
           Buffer.from(value).toString("base64"),
           Buffer.from(value).toString("base64url"),
         ])
-          assert(
+          assertSmoke(
             !documents.includes(representation),
             "Smoke: plaintext found in component snapshot",
           );
@@ -587,7 +562,7 @@ async function journey(smokeBackend) {
           bytes.toString("utf8"),
           Array.from(bytes).join(","),
         ])
-          assert(
+          assertSmoke(
             !documents.includes(representation) &&
               !documents.includes(JSON.stringify(representation).slice(1, -1)),
             "Smoke: master key found in component snapshot",

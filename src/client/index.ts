@@ -6,7 +6,7 @@ import type {
   PaginationOptions,
 } from "convex/server";
 import type { ComponentApi } from "../component/_generated/component.js";
-import { validateGenerate } from "../shared/bounds.js";
+import { boundedString, validateGenerate } from "../shared/bounds.js";
 import { vaultError } from "../shared/errors.js";
 import type { Storage, Lookup, Metadata } from "../shared/validators.js";
 export { isVaultError, VAULT_ERROR_CODES } from "../shared/errors.js";
@@ -142,10 +142,8 @@ export class Vault<const K extends Record<string, KindOptions> = Record<string, 
   ) {
     this.options = options ?? { kinds: {} };
     const kinds = Object.entries(this.options.kinds);
-    if (
-      kinds.some(([kind]) => kind.length === 0 || kind.length > 128) ||
-      kinds.filter(([, policy]) => policy.auditReveals).length > 100
-    )
+    for (const [kind] of kinds) boundedString(kind, 128);
+    if (kinds.filter(([, policy]) => policy.auditReveals).length > 100)
       throw vaultError("VAULT_INVALID_ARGUMENT");
   }
   /** Creates, reveals, verifies, replaces, revokes, reads and lists encrypted credentials. */
